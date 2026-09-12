@@ -112,6 +112,46 @@ try
 finally { if (Directory.Exists(settingsDir)) Directory.Delete(settingsDir, true); }
 Console.WriteLine($"PASS TOTAL: {passed} tests (parser, hotkeys, settings)");
 
+// The settings writer must not perform a blocking disk action on the caller.
+var initial = new AppSettings();
+int unchangedWrites = 0;
+var unchangedWriter = new SettingsWriter(_ => Interlocked.Increment(ref unchangedWrites), initial);
+Expect(await unchangedWriter.SaveAsync(initial) == null && unchangedWrites == 0, "已保存且未更改时不重复写盘");
+using var entered = new ManualResetEventSlim();
+using var releaseWrite = new ManualResetEventSlim();
+var writeOrder = new List<int>();
+var queuedWriter = new SettingsWriter(value =>
+{
+    if (value.Bpm == 90)
+    {
+        entered.Set();
+        if (!releaseWrite.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException("Test gate timed out.");
+    }
+    lock (writeOrder) writeOrder.Add(value.Bpm);
+}, initial);
+try
+{
+    var firstSave = queuedWriter.SaveAsync(initial with { Bpm = 90 });
+    Expect(entered.Wait(TimeSpan.FromSeconds(2)) && !firstSave.IsCompleted, "慢写盘在后台等待，调用方已返回");
+    Expect(ReferenceEquals(firstSave, queuedWriter.SaveAsync(initial with { Bpm = 90 })), "重复待保存值共用同一任务");
+    var finalSave = queuedWriter.SaveAsync(initial);
+    Expect(!finalSave.IsCompleted && ReferenceEquals(finalSave, queuedWriter.FlushAsync()), "关闭等待最后一次保存而非首个保存");
+    releaseWrite.Set();
+    Expect(await finalSave.WaitAsync(TimeSpan.FromSeconds(3)) == null, "后台队列可完整结束");
+    Expect(writeOrder.SequenceEqual(new[] {90, 120}), "快速修改再还原仍按顺序写入最终值");
+    await queuedWriter.SaveAsync(initial);
+    Expect(writeOrder.Count == 2, "关闭时已保存快照不重复写入");
+}
+finally { releaseWrite.Set(); }
+int attempts = 0;
+var retryWriter = new SettingsWriter(_ =>
+{
+    if (Interlocked.Increment(ref attempts) == 1) throw new IOException("Simulated disk failure");
+});
+Expect((await retryWriter.SaveAsync(initial))?.Contains("Simulated") == true, "后台保存错误返回给界面");
+Expect(await retryWriter.SaveAsync(initial) == null && attempts == 2, "相同值写入失败后可重试");
+Console.WriteLine($"PASS TOTAL: {passed} tests including async settings writer");
+
 sealed class FakeHotkeys : IHotkeyBackend
 {
     public HashSet<HotkeyBinding> Occupied { get; } = new();

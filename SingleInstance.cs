@@ -33,7 +33,7 @@ public static class SingleInstance
                 {
                     app.Dispatcher.BeginInvoke(new Action(() =>
                     {
-                        if (app.Dispatcher.HasShutdownStarted) return;
+                        if (app.Dispatcher.HasShutdownStarted || window.IsClosing) return;
                         if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
                         window.Show(); window.Activate();
                     }));

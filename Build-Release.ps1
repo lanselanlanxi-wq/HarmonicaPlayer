@@ -1,10 +1,13 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
     dotnet run --project .\Tests\ParserTests.csproj -c Release
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed. Publishing cancelled.' }
 
-    $version = '0.1.3'
+    dotnet run --project .\Tests\WindowsSmoke\WindowsSmokeTests.csproj -c Release
+    if ($LASTEXITCODE -ne 0) { throw 'Windows close tests failed. Publishing cancelled.' }
+
+    $version = '0.1.5'
     $buildStamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
     $outputDir = Join-Path $PSScriptRoot "bin\Release\publish-$version-$buildStamp"
     dotnet publish .\HarmonicaPlayer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $outputDir
@@ -13,6 +16,9 @@ try {
 
     Copy-Item .\rhythm-demo.txt $outputDir
     Copy-Item .\README.md $outputDir
+    Copy-Item -LiteralPath '.\使用说明.txt' -Destination $outputDir
+    Copy-Item -LiteralPath '.\ai转谱模板.txt' -Destination $outputDir -Force
+    Copy-Item -LiteralPath '.\简谱' -Destination $outputDir -Recurse -Force
     $zipPath = Join-Path $PSScriptRoot "bin\Release\HarmonicaPlayer-v$version-win-x64.zip"
     Compress-Archive -Path (Join-Path $outputDir '*') -DestinationPath $zipPath -Force
     Write-Host "ZIP: $zipPath"
