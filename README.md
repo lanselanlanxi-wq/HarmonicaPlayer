@@ -1,82 +1,69 @@
-# 口琴简谱播放器 0.1 — 源码测试版
+# HarmonicaPlayer 0.1.3
 
-Windows 10/11 x64，C# + WPF，.NET 8 SDK。独立实现，未复制参考仓库源码。
-本交付环境没有 .NET SDK：未编译、未运行 Windows GUI、未进行游戏实测，不含已验证的 EXE。
+Windows 10/11 x64 口琴简谱自动演奏工具。支持 UTF-8 TXT 导入、节奏解析、音符时间列表预览，以及自定义开始/停止快捷键。
 
-## 创建与运行
-
-1. 安装 Windows x64 的 .NET 8 **SDK**，不是仅安装 Runtime：
-   https://dotnet.microsoft.com/en-us/download/dotnet/8.0
-2. 解压源码，例如放到 `D:\Projects\HarmonicaPlayer`。打开 PowerShell：
-
-```powershell
-cd D:\Projects\HarmonicaPlayer
-dotnet --list-sdks
-dotnet run --project .\Tests\ParserTests.csproj
-dotnet run --project .\HarmonicaPlayer.csproj
-```
-
-项目已包含所需文件，不必执行 `dotnet new`，不需要 Visual Studio；VS Code可用于编辑。
-如手动创建项目，新建文件夹并按源码包中的文件名保存全部文件即可。
-测试项目不发送任何输入，只测试解析器；不替代Windows输入和时序测试。
-
-## 发布可双击的EXE
-
-```powershell
-dotnet publish .\HarmonicaPlayer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=embedded -o .\publish
-.\publish\HarmonicaPlayer.exe
-```
-
-EXE包含运行库，较大是正常现象。首次还原/发布需要网络。不要启用WPF不适用的裁剪。
-发布说明：https://learn.microsoft.com/en-us/dotnet/core/deploying/single-file/overview
+[下载程序](https://github.com/lanselanlanxi-wq/HarmonicaPlayer/releases/latest) · [源码](https://github.com/lanselanlanxi-wq/HarmonicaPlayer)
 
 ## 使用
 
-1. 导入UTF-8 TXT或直接编辑文本框，删除标题、歌词、速度说明等非谱面文字。
-2. 默认勾选“仅日志测试”，先开始检查解析和进度。它不发声，也不发送真实输入。
-3. 总时长默认300ms，其中末尾20ms留白；休止0占完整300ms。
-4. 确认使用场景允许自动输入后，取消仅日志测试，点击开始或按F6。
-5. 确认提示后3秒内切回已装备口琴的目标窗口，保持前台。F8随时停止。
-6. 点击其他窗口会自动停止；重新开始从头演奏。不支持暂停、跳转。
+1. 解压发布包，运行 HarmonicaPlayer.exe。
+2. 导入 TXT；带长短音符号的谱子须勾选“节奏模式”。
+3. 设置速度（四分音符/分钟）；120表示一拍500ms，90表示一拍约667ms。
+4. 先用“仅日志测试”检查谱面；该模式不发声、不发送键鼠输入。
+5. 实际演奏时取消“仅日志测试”，点击开始或使用开始快捷键，确认后在倒计时内切到游戏口琴界面。
+6. 默认 F6 开始、F8 停止；切出目标窗口也会停止。重新开始会从头播放。
 
-真实模式会锁定倒计时结束时的外部前台窗口，**不会识别它是不是游戏**。
-务必自己切到正确窗口，不要把聊天软件、终端作为目标。同一游戏窗口内打开聊天框/菜单也无法识别。
-不自动申请管理员权限、不绕过输入限制；若SendInput失败会停止。
-SendInput成功只说明系统接收了事件，不保证游戏识别。
-普通热键注册可能被占用，注册失败时禁止真实演奏；关掉冲突程序再重启。
+## 0.1.3 快捷键与设置
 
-## 语法
+- 点击“自定义快捷键”，点击录入框直接按键，也可使用下拉框和 Ctrl / Alt / Shift 勾选项。
+- 默认 F6 / F8；支持组合键，例如 Ctrl+F6、Ctrl+Shift+F8。
+- 开始和停止不能相同。F12、Win组合和部分系统组合不可用；Z/X/C/V/B/N/M/逗号保留给音符输出，包括以这些键组成的组合键。
+- 字母、数字、空格需配合修饰键，减少全局快捷键对输入的影响。
+- 应用后在主界面分别显示注册结果；若占用，重新修改或解除冲突后点“重试注册”，不用重启。
+- 开始键注册失败时可点按钮开始；停止键注册失败时禁止真实输出，仍可运行仅日志模式。
+- 编辑快捷键期间不演奏，临时释放全局快捷键；取消编辑会重新注册原设置。
+- 启动前等用户松开启动键和修饰键；倒计时结束也会再次检查，等待超过15秒取消。
+- 自动保存快捷键、节奏模式、BPM、留白及分段停顿。每次启动仍默认“仅日志测试”。
+- 设置保存在 `%LOCALAPPDATA%\HarmonicaPlayer\settings.json`，不在发布包内。无效/损坏设置会回退默认值并提示。
+- 0.1.3及以后同一Windows用户会话只运行一个实例；再次启动尝试恢复并激活已有窗口。旧版0.1.2不具备该机制，升级前请关闭旧版。
 
-| 写法 | 含义 |
-|---|---|
-| 1~7 | 普通音 |
-| 【123】 | 高音范围 |
-| （123）或(123) | 低音范围 |
+## 简谱格式
+
+TXT仅放音符，不包含标题、歌词、BPM或拍号声明。AI转换图片后仍需核对高低音点和节奏标记。
+
+| 文本 | 含义 |
+| --- | --- |
+| 1～7 | 中音，一拍 |
+| 【123】 | 高音 |
+| （123）或 (123) | 低音 |
 | #6 | 下一个音升半音 |
-| 【#6】 | 高音6升半音 |
-| 0 | 休止 |
-| 空格、换行、竖线 | 排版，不改变时值 |
+| 5 — 或 5 - | 两拍，持续同一个音 |
+| 5_ / 5__ | 半拍 / 四分之一拍 |
+| 5. / 5_. | 1.5拍 / 0.75拍 |
+| 0 / 0_ / 0 — | 休止1拍 / 半拍 / 两拍 |
+| \| | 小节分隔，本身不加停顿 |
 
-不支持括号嵌套、延音线、附点、三连音、8作为高音1或自动节奏推断。
-非法字符会阻止演奏并显示字符位置。#跨空格作用于下一音，但不可跨音区括号。
-键位：普通1~7=Z X C V B N M，高1=逗号，高2~7=右键加对应键，低音=左键加对应键，升半音=额外中键。
-高1直接使用逗号，其他高音使用右键；需在你的游戏版本中验证。
+节奏模式中空格/换行只用于排版，停顿写0。旧模式继续使用每音固定毫秒数和空格/换行额外停顿。
+留白包含在音符的总时长中，不会增加总时长；最短非休止音扣除留白后至少40ms。留白范围10～5000ms。
+预览是音符时间列表；本版不提供声音试听、图片识谱、标准简谱图形排版、MIDI、连音线、三连音或小节拍数校验。
 
-## 最小验收
+现有游戏输出映射：普通1～7使用Z/X/C/V/B/N/M；高1使用逗号；高2～7配合鼠标右键；低音配合左键；升半音配合中键。0.1.3自定义的是开始/停止快捷键，并非这些演奏映射。
 
-- 用test-score.txt验证普通、高低音、半音、111重复音、0休止。
-- 测试倒计时取消、长音中F8停止、鼠标修饰键中途停止、切出窗口、关闭窗口。
-- 日志和解析器测试通过并不代表游戏测试通过。
-- 严重调度超时会停止，避免批量补发；默认80~5000ms每音，留白至少10ms。
-- 只释放本程序尝试按下的键；最终释放失败会提示手动按下并松开相关键。
-- 工作线程退出后才能再次启动；UI阻塞、强杀、系统崩溃时不能保证立即停止或清理。
-- 不应因其他项目能运行就认定游戏允许自动输入；被限制时停止，不绕过反作弊。
+## 编译与打包
 
-## 文件
+开发环境需要 .NET 8 SDK。项目目录中运行：
 
-- Program.cs：WPF界面、快捷键、倒计时、播放任务、焦点保护。
-- ScoreParser.cs：解析器。
-- NativeInput.cs：扫描码/鼠标输出和释放。
-- Tests：无第三方测试包的解析自测。
+```powershell
+dotnet run --project .\Tests\ParserTests.csproj
+dotnet publish .\HarmonicaPlayer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\bin\Release\publish-v0.1.3
+```
 
-后续再增加可配置符号、真实声音预览、曲库和播放列表；0.1不含MIDI。
+每步成功后再继续。发布目录内的全部文件应一起打包。
+也可使用 `Build-Release.ps1`，它先运行测试，成功后编译并生成 Windows ZIP；任一步失败即终止。
+
+## 验证与限制
+
+当前源码已通过75项自动测试，Windows WPF项目交叉编译通过（0警告、0错误）。自动测试覆盖旧谱解析、时值、快捷键校验、模拟占用/释放/互换和设置读写。模拟注册测试不代表Windows全局热键或游戏输入已实测。
+窗口、热键及游戏验收清单见 UPDATE-0.1.3.md。只能在允许自动输入的使用场景运行；程序不识别目标是不是游戏，也无法检测同一游戏窗口内是否打开聊天框。
+
+Windows热键注册实现参考：[Microsoft RegisterHotKey 文档](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey)。

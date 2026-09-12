@@ -4,6 +4,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using Microsoft.Win32;
 
 namespace HarmonicaPlayer;
@@ -11,7 +12,7 @@ namespace HarmonicaPlayer;
 public static class Program
 {
     [STAThread]
-    public static void Main() => new Application().Run(new PlayerWindow());
+    public static void Main() => SingleInstance.Run();
 }
 
 public sealed class PlayerWindow : Window
@@ -22,7 +23,7 @@ public sealed class PlayerWindow : Window
     private readonly TextBox spaceGap = new() { Text = "100", Width = 75 };
     private readonly TextBox lineGap = new() { Text = "300", Width = 75 };
     private readonly CheckBox dry = new() { Content = "仅日志测试（不发送键鼠、不发声）", IsChecked = true, Margin = new Thickness(0, 10, 0, 10) };
-    private readonly TextBlock status = new() { Text = "就绪：先导入谱面。F6开始，F8停止。", TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock status = new() { Text = "就绪：先导入谱面，快捷键状态见上方。", TextWrapping = TextWrapping.Wrap };
     private readonly TextBox log = new() { IsReadOnly = true, Height = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly Button start = new() { Content = "开始 F6", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
     private readonly Button import = new() { Content = "导入 TXT", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
@@ -35,19 +36,29 @@ public sealed class PlayerWindow : Window
     private readonly NativeInput output = new();
     private HwndSource? source;
     private IntPtr hwnd;
-    private bool hotkeysReady, allowClose, closing;
+    private bool allowClose, closing, editingHotkeys, beginning;
+    private HotkeyController? hotkeys;
+    private AppSettings settings = new();
+    private readonly DispatcherTimer saveTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    private readonly TextBlock settingsStatus = new() { TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock hotkeyStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 6) };
+    private readonly Button configure = new() { Content = "自定义快捷键", Margin = new Thickness(5), Padding = new Thickness(10, 6, 10, 6) };
+    private readonly Button retry = new() { Content = "重试注册", Margin = new Thickness(5), Padding = new Thickness(10, 6, 10, 6) };
+    private readonly Button stop = new() { Content = "停止 F8", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
 
     public PlayerWindow()
     {
-        Title = "口琴简谱播放器 0.1.2"; Width = 740; Height = 900; MinWidth = 600; MinHeight = 600;
+        Title = "口琴简谱播放器 0.1.3"; Width = 740; Height = 900; MinWidth = 600; MinHeight = 600;
         var panel = new StackPanel { Margin = new Thickness(18) };
         Content = new ScrollViewer { Content = panel };
         panel.Children.Add(new TextBlock { Text = "TXT → 单音口琴演奏", FontSize = 23 });
         panel.Children.Add(new TextBlock { Text = "【高音】 （低音） #升半音；0休止，-或—延长一拍，_半拍，__四分之一拍，.附点。例：1 2_ 3_ 5 — | 0 6. 5_ 1 |", Margin = new Thickness(0, 10, 0, 10), TextWrapping = TextWrapping.Wrap });
-        var controls = new StackPanel { Orientation = Orientation.Horizontal };
+        var controls = new WrapPanel { Orientation = Orientation.Horizontal };
         controls.Children.Add(import); controls.Children.Add(refresh); controls.Children.Add(start);
-        var stop = new Button { Content = "停止 F8", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
-        controls.Children.Add(stop); panel.Children.Add(controls); panel.Children.Add(score);
+        controls.Children.Add(stop); panel.Children.Add(controls);
+        var shortcuts = new StackPanel { Orientation = Orientation.Horizontal };
+        shortcuts.Children.Add(configure); shortcuts.Children.Add(retry); panel.Children.Add(shortcuts);
+        panel.Children.Add(hotkeyStatus); panel.Children.Add(settingsStatus); panel.Children.Add(score);
         panel.Children.Add(rhythm);
         var tempo = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
         tempo.Children.Add(new TextBlock { Text = "速度 ♩ / 分钟：", VerticalAlignment = VerticalAlignment.Center });
@@ -62,39 +73,43 @@ public sealed class PlayerWindow : Window
         pauses.Children.Add(new TextBlock { Text = "空格额外停顿(ms)：", VerticalAlignment = VerticalAlignment.Center }); pauses.Children.Add(spaceGap);
         pauses.Children.Add(new TextBlock { Text = "  换行额外停顿(ms)：", VerticalAlignment = VerticalAlignment.Center }); pauses.Children.Add(lineGap);
         panel.Children.Add(pauses); panel.Children.Add(dry); panel.Children.Add(status); panel.Children.Add(log);
+        settings = SettingsStore.Load(SettingsStore.DefaultPath, out var loadWarning);
+        rhythm.IsChecked = settings.Rhythm; bpm.Text = settings.Bpm.ToString();
+        duration.Text = settings.Duration.ToString(); gap.Text = settings.Gap.ToString();
+        spaceGap.Text = settings.SpaceGap.ToString(); lineGap.Text = settings.LineGap.ToString();
+        settingsStatus.Text = loadWarning ?? "设置会自动保存；每次启动默认开启“仅日志测试”。";
+        saveTimer.Tick += (_, _) => { saveTimer.Stop(); SaveCurrentSettings(); };
+        configure.Click += (_, _) => ConfigureHotkeys();
+        retry.Click += (_, _) => ApplyHotkeys();
         import.Click += (_, _) => Import(); start.Click += async (_, _) => await Begin();
         stop.Click += (_, _) => Stop();
         refresh.Click += (_, _) => Preview();
-        rhythm.Checked += (_, _) => { SetBusy(false); Preview(); };
-        rhythm.Unchecked += (_, _) => { SetBusy(false); Preview(); };
+        rhythm.Checked += (_, _) => { SetBusy(false); Preview(); QueueSave(); };
+        rhythm.Unchecked += (_, _) => { SetBusy(false); Preview(); QueueSave(); };
         score.TextChanged += (_, _) => Preview();
         bpm.TextChanged += (_, _) => Preview();
         duration.TextChanged += (_, _) => Preview();
         spaceGap.TextChanged += (_, _) => Preview();
         lineGap.TextChanged += (_, _) => Preview();
+        foreach (var box in new[] { bpm, duration, gap, spaceGap, lineGap })
+            box.TextChanged += (_, _) => QueueSave();
         SetBusy(false); Preview();
         SourceInitialized += (_, _) =>
         {
             hwnd = new WindowInteropHelper(this).Handle;
             source = HwndSource.FromHwnd(hwnd); source.AddHook(Hook);
-            bool a = NativeInput.RegisterHotKey(hwnd, 1, 0x4000, 0x75);
-            bool b = NativeInput.RegisterHotKey(hwnd, 2, 0x4000, 0x77);
-            hotkeysReady = a && b;
-            if (!hotkeysReady)
-            {
-                NativeInput.UnregisterHotKey(hwnd, 1); NativeInput.UnregisterHotKey(hwnd, 2);
-                status.Text = "F6/F8注册失败（可能被占用）。禁止真实输出；关闭冲突软件后重启。";
-            }
+            hotkeys = new HotkeyController(new NativeHotkeys(hwnd));
+            ApplyHotkeys();
         };
         Closing += async (_, e) =>
         {
             if (allowClose) return;
             e.Cancel = true;
             if (closing) return;
-            closing = true; Stop();
+            closing = true; saveTimer.Stop(); SaveCurrentSettings(); Stop();
             if (running != null) await running;
             output.Release();
-            NativeInput.UnregisterHotKey(hwnd, 1); NativeInput.UnregisterHotKey(hwnd, 2);
+            hotkeys?.Suspend();
             source?.RemoveHook(Hook);
             allowClose = true; Close();
         };
@@ -103,25 +118,90 @@ public sealed class PlayerWindow : Window
     {
         if (message == 0x0312)
         {
-            if (w.ToInt32() == 1) _ = Begin();
-            if (w.ToInt32() == 2) Stop();
+            // Discard queued messages from old registrations after editing.
+            uint packed = unchecked((uint)l.ToInt64());
+            uint key = packed >> 16, modifiers = packed & 0xFFFF;
+            if (!editingHotkeys && w.ToInt32() == 1 && hotkeys?.StartReady == true &&
+                key == settings.Start.Key && modifiers == settings.Start.Modifiers) _ = Begin(key);
+            if (!editingHotkeys && w.ToInt32() == 2 && hotkeys?.StopReady == true &&
+                key == settings.Stop.Key && modifiers == settings.Stop.Modifiers) Stop();
             handled = true;
         }
         return IntPtr.Zero;
     }
-    private void Import()
+    private void QueueSave()
     {
-        if (cancellation != null) return;
-        var dialog = new OpenFileDialog { Filter = "TXT 简谱|*.txt" };
-        if (dialog.ShowDialog() != true) return;
+        if (closing) return;
+        saveTimer.Stop(); saveTimer.Start();
+    }
+    private void SaveCurrentSettings()
+    {
+        if (!int.TryParse(bpm.Text, out int tempo) || !int.TryParse(duration.Text, out int ms) ||
+            !int.TryParse(gap.Text, out int silence) || !int.TryParse(spaceGap.Text, out int space) ||
+            !int.TryParse(lineGap.Text, out int line))
+        { settingsStatus.Text = "部分数值尚未填写完整，暂未保存。"; return; }
+        var next = settings with { Rhythm = rhythm.IsChecked == true, Bpm = tempo, Duration = ms,
+            Gap = silence, SpaceGap = space, LineGap = line };
         try
         {
+            next.Validate(); SettingsStore.Save(SettingsStore.DefaultPath, next); settings = next;
+            settingsStatus.Text = "设置已保存（快捷键、节奏模式、速度和停顿）。";
+        }
+        catch (Exception e) { settingsStatus.Text = "设置未保存：" + e.Message; }
+    }
+    private void ApplyHotkeys()
+    {
+        if (hotkeys == null || cancellation != null || closing || beginning || editingHotkeys) return;
+        hotkeys.Apply(settings.Start, settings.Stop);
+        start.Content = "开始 " + settings.Start.Label; stop.Content = "停止 " + settings.Stop.Label;
+        hotkeyStatus.Text = hotkeys.Describe(settings.Start, settings.Stop);
+    }
+    private void ConfigureHotkeys()
+    {
+        if (hotkeys == null || cancellation != null || closing || beginning || editingHotkeys) return;
+        editingHotkeys = true; hotkeys.Suspend();
+        try
+        {
+            var dialog = new HotkeyDialog(settings.Start, settings.Stop) { Owner = this };
+            if (dialog.ShowDialog() == true)
+            {
+                settings = settings with { Start = dialog.Start, Stop = dialog.Stop };
+                // Save bindings even if a timing text box currently contains incomplete input.
+                try { SettingsStore.Save(SettingsStore.DefaultPath, settings); }
+                catch (Exception e) { settingsStatus.Text = "快捷键本次已应用，但保存失败：" + e.Message; }
+                SaveCurrentSettings();
+            }
+        }
+        finally { editingHotkeys = false; ApplyHotkeys(); }
+    }
+    private async Task WaitForRelease(uint triggerKey, CancellationToken token)
+    {
+        var timeout = Stopwatch.StartNew();
+        while (NativeHotkeys.Held(triggerKey))
+        {
+            token.ThrowIfCancellationRequested();
+            if (timeout.Elapsed.TotalSeconds > 15)
+                throw new InvalidOperationException("等待松开快捷键超时，已取消演奏。");
+            status.Text = $"请松开启动键及 Ctrl / Alt / Shift / Win；{settings.Stop.Label} 可停止。";
+            await Task.Delay(20, token);
+        }
+        token.ThrowIfCancellationRequested();
+    }
+    private void Import()
+    {
+        if (cancellation != null || beginning || editingHotkeys || closing) return;
+        beginning = true; SetBusy(true);
+        try
+        {
+            var dialog = new OpenFileDialog { Filter = "TXT 简谱|*.txt" };
+            if (dialog.ShowDialog(this) != true || closing) return;
             if (new FileInfo(dialog.FileName).Length > 1024 * 1024) throw new IOException("文件不得超过1MB。");
             score.Text = File.ReadAllText(dialog.FileName, new UTF8Encoding(false, true));
-            Title = "口琴简谱播放器 0.1.2 — " + Path.GetFileName(dialog.FileName);
+            Title = "口琴简谱播放器 0.1.3 — " + Path.GetFileName(dialog.FileName);
             Preview(); status.Text = "已导入；请查看解析预览。TXT只放谱面，速度在界面设置。";
         }
         catch (Exception e) { status.Text = "导入失败，请使用UTF-8 TXT：" + e.Message; }
+        finally { beginning = false; SetBusy(false); }
     }
     private void Stop()
     {
@@ -129,30 +209,34 @@ public sealed class PlayerWindow : Window
         if (cancellation != null) status.Text = "正在停止并释放输入…";
         else { var error = output.Release(); status.Text = error ?? "已停止。"; }
     }
-    private async Task Begin()
+    private async Task Begin(uint triggerKey = 0)
     {
-        if (cancellation != null || closing) return;
+        if (cancellation != null || closing || beginning || editingHotkeys) return;
+        beginning = true; SetBusy(true);
         try
         {
             var notes = ScoreParser.Parse(score.Text, rhythm.IsChecked == true);
             var (ms, spaceMs, lineMs) = Timing();
-            if (!int.TryParse(gap.Text, out int silence) || silence < 10 ||
+            if (!int.TryParse(gap.Text, out int silence) || silence < 10 || silence > 5000 ||
                 notes.Any(n => n.Degree != 0 && n.Beats * ms - silence < 40))
-                throw new FormatException("留白至少10毫秒；最短音减去留白后须至少40毫秒。请降低速度或减少留白。");
+                throw new FormatException("留白范围10～5000毫秒；最短音减去留白后须至少40毫秒。请降低速度或减少留白。");
             bool simulation = dry.IsChecked == true;
-            if (!simulation && !hotkeysReady) throw new InvalidOperationException("紧急停止热键不可用，禁止真实输出。");
-            if (!simulation && MessageBox.Show(this,
-                "即将发送真实键鼠输入。自动输入可能受游戏规则限制。\n确认允许使用后再继续；不要打开聊天框、背包或其他菜单。\n3秒内切到目标窗口，F8停止；切离目标窗口自动停止。",
-                "确认演奏", MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
+            if (!simulation && hotkeys?.StopReady != true)
+                throw new InvalidOperationException($"停止键 {settings.Stop.Label} 不可用，禁止真实演奏。请点击“自定义快捷键”或“重试注册”。");
             cancellation = new CancellationTokenSource();
+            if (!simulation && MessageBox.Show(this,
+                $"即将发送真实键鼠输入。自动输入可能受游戏规则限制。\n确认允许使用后再继续；不要打开聊天框、背包或其他菜单。\n3秒内切到目标窗口，{settings.Stop.Label}停止；切离目标窗口自动停止。",
+                "确认演奏", MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
+            if (closing || cancellation.IsCancellationRequested) return;
+            SaveCurrentSettings();
             SetBusy(true); log.Clear();
-            running = Run(notes, ms, silence, spaceMs, lineMs, simulation, cancellation.Token);
+            running = Run(notes, ms, silence, spaceMs, lineMs, simulation, triggerKey, cancellation.Token);
             await running;
         }
         catch (Exception e) { status.Text = e.Message; }
         finally
         {
-            cancellation?.Dispose(); cancellation = null; running = null; SetBusy(false);
+            cancellation?.Dispose(); cancellation = null; running = null; beginning = false; SetBusy(false);
         }
     }
     private (double Ms, int Space, int Line) Timing()
@@ -196,15 +280,19 @@ public sealed class PlayerWindow : Window
         bool useRhythm = rhythm.IsChecked == true;
         bpm.IsEnabled = !busy && useRhythm;
         duration.IsEnabled = spaceGap.IsEnabled = lineGap.IsEnabled = !busy && !useRhythm;
+        configure.IsEnabled = retry.IsEnabled = !busy;
         score.IsReadOnly = busy;
     }
-    private async Task Run(List<ScoreNote> notes, double ms, int silence, int spaceMs, int lineMs, bool simulation, CancellationToken token)
+    private async Task Run(List<ScoreNote> notes, double ms, int silence, int spaceMs, int lineMs, bool simulation, uint triggerKey, CancellationToken token)
     {
         string result = "演奏完成。";
         try
         {
+            await WaitForRelease(triggerKey, token);
             for (int n = 3; n > 0; n--)
             { status.Text = $"{n}秒后开始，请切到目标窗口…"; await Task.Delay(1000, token); }
+            // Check again after countdown: the user may have used Alt+Tab to switch windows.
+            await WaitForRelease(triggerKey, token);
             var target = NativeInput.GetForegroundWindow();
             NativeInput.GetWindowThreadProcessId(target, out uint pid);
             if (!simulation && (target == IntPtr.Zero || pid == (uint)Environment.ProcessId))

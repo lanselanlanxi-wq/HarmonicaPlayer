@@ -52,3 +52,74 @@ bool legacyRejects = false;
 try { ScoreParser.Parse("1-", false); } catch (FormatException) { legacyRejects = true; }
 Expect(legacyRejects, "旧模式不静默忽略节奏标记");
 Console.WriteLine($"PASS: {passed} tests");
+
+void RejectHotkey(Action action, string name)
+{
+    bool rejected = false;
+    try { action(); } catch (FormatException) { rejected = true; }
+    Expect(rejected, name);
+}
+HotkeyBinding.ValidatePair(new(0x75, 2), new(0x77));
+Expect(new HotkeyBinding(0x75, 7).Label == "Ctrl + Alt + Shift + F6", "组合键显示及MOD位对应");
+RejectHotkey(() => HotkeyBinding.ValidatePair(new(0x75), new(0x75)), "拒绝重复开始停止键");
+foreach (var binding in new[] {new HotkeyBinding(0x7B), new HotkeyBinding(0x75, 8),
+    new HotkeyBinding(0x5A, 2), new HotkeyBinding(0x41), new HotkeyBinding(0x73, 1),
+    new HotkeyBinding(0x2E, 3), new HotkeyBinding(0), new HotkeyBinding(0x11),
+    new HotkeyBinding(0x1B, 2), new HotkeyBinding(0x20, 1)})
+    RejectHotkey(() => HotkeyBinding.ValidatePair(binding, new(0x77)), "拒绝无效/保留键 " + binding.Label);
+Expect(new HotkeyBinding(0x41, 2).Error() == null && new HotkeyBinding(0x24).Error() == null, "接受Ctrl+A和Home");
+
+var backend = new FakeHotkeys();
+var manager = new HotkeyController(backend);
+backend.Occupied.Add(HotkeyBinding.DefaultStart);
+manager.Apply(HotkeyBinding.DefaultStart, HotkeyBinding.DefaultStop);
+Expect(!manager.StartReady && manager.StopReady && manager.StartError == 1409, "开始冲突仍保留停止键");
+Expect(manager.Describe(HotkeyBinding.DefaultStart, HotkeyBinding.DefaultStop).Contains("点击“开始”"), "开始冲突可用按钮提示");
+backend.Occupied.Clear(); backend.Occupied.Add(HotkeyBinding.DefaultStop);
+manager.Apply(HotkeyBinding.DefaultStart, HotkeyBinding.DefaultStop);
+Expect(manager.StartReady && !manager.StopReady, "停止冲突独立标记");
+Expect(manager.Describe(HotkeyBinding.DefaultStart, HotkeyBinding.DefaultStop).Contains("禁止真实演奏"), "停止冲突阻断提示");
+backend.Occupied.Clear(); manager.Apply(HotkeyBinding.DefaultStart, HotkeyBinding.DefaultStop);
+Expect(manager.StartReady && manager.StopReady, "解除占用后重试成功");
+manager.Apply(HotkeyBinding.DefaultStop, HotkeyBinding.DefaultStart);
+Expect(backend.Registered[1] == HotkeyBinding.DefaultStop && backend.Registered[2] == HotkeyBinding.DefaultStart, "互换快捷键先释放旧注册");
+RejectHotkey(() => manager.Apply(new(0x75), new(0x75)), "无效配置拒绝应用");
+Expect(manager.StartReady && manager.StopReady && backend.Registered.Count == 2, "无效配置保留已有注册");
+manager.Suspend(); manager.Suspend();
+Expect(backend.Registered.Count == 0 && !manager.StartReady && !manager.StopReady, "多次暂停幂等");
+manager.Apply(new(0x75, 2), new(0x77, 5));
+Expect(backend.Registered[1].Modifiers == 2 && backend.Registered[2].Modifiers == 5, "组合键正确传递至注册层");
+
+string settingsDir = Path.Combine(Path.GetTempPath(), "HarmonicaPlayerTests-" + Guid.NewGuid().ToString("N"));
+string settingsPath = Path.Combine(settingsDir, "settings.json");
+try
+{
+    var defaults = SettingsStore.Load(settingsPath, out var warning);
+    Expect(warning == null && defaults.Start == HotkeyBinding.DefaultStart, "缺少设置使用默认值");
+    var custom = new AppSettings { Start = new(0x75, 2), Stop = new(0x77, 4), Rhythm = true, Bpm = 90, Gap = 10, Duration = 450, SpaceGap = 80, LineGap = 150 };
+    SettingsStore.Save(settingsPath, custom);
+    Expect(SettingsStore.Load(settingsPath, out warning) == custom && warning == null, "快捷键和时间设置往返保存");
+    var changed = custom with { Bpm = 100 };
+    SettingsStore.Save(settingsPath, changed);
+    Expect(SettingsStore.Load(settingsPath, out warning).Bpm == 100 && Directory.GetFiles(settingsDir).Length == 1, "原子覆盖无临时文件残留");
+    RejectHotkey(() => SettingsStore.Save(settingsPath, custom with { Bpm = 0 }), "不保存无效数值");
+    Expect(SettingsStore.Load(settingsPath, out warning).Bpm == 100, "无效写入保留旧设置");
+    File.WriteAllText(settingsPath, "{bad json");
+    Expect(SettingsStore.Load(settingsPath, out warning) == new AppSettings() && warning != null, "损坏设置回退并告知");
+    File.WriteAllText(settingsPath, "{\"Start\":null}");
+    Expect(SettingsStore.Load(settingsPath, out warning).Start == HotkeyBinding.DefaultStart && warning != null, "空快捷键安全回退");
+}
+finally { if (Directory.Exists(settingsDir)) Directory.Delete(settingsDir, true); }
+Console.WriteLine($"PASS TOTAL: {passed} tests (parser, hotkeys, settings)");
+
+sealed class FakeHotkeys : IHotkeyBackend
+{
+    public HashSet<HotkeyBinding> Occupied { get; } = new();
+    public Dictionary<int, HotkeyBinding> Registered { get; } = new();
+    public int Register(int id, HotkeyBinding binding)
+    {
+        if (Occupied.Contains(binding) || Registered.Values.Contains(binding) || Registered.ContainsKey(id)) return 1409;
+        Registered[id] = binding; return 0;
+    }
+    public void Unregister(int id) => Registered.Remove(id);
+}
