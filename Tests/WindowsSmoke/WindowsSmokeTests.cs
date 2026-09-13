@@ -24,7 +24,8 @@ public static class WindowsSmokeTests
                     PlayerWindow? window = null;
                     try
                     {
-                        window = new PlayerWindow(path);
+                        var audio = new FakeToneOutput();
+                        window = new PlayerWindow(path, audio);
                         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                         window.Closed += (_, _) => closed.TrySetResult();
                         window.Show();
@@ -48,6 +49,7 @@ public static class WindowsSmokeTests
                             {
                                 var log = Descendants(window).OfType<TextBox>().Single(t => t.IsReadOnly && t.Height == 110);
                                 if (string.IsNullOrWhiteSpace(log.Text)) throw new Exception("Test playback did not produce a log entry.");
+                                if (audio.StartCount == 0) throw new Exception("Test playback did not start preview audio.");
                             }
                         }
                         var clock = Stopwatch.StartNew();
@@ -68,6 +70,14 @@ public static class WindowsSmokeTests
         app.Run();
         return failures == 0 ? 0 : 1;
     }
+
+    private sealed class FakeToneOutput : IToneOutput
+    {
+        public int StartCount { get; private set; }
+        public void Start(ScoreNote note) => StartCount++;
+        public void Stop() { }
+    }
+
     private static IEnumerable<DependencyObject> Descendants(DependencyObject node)
     {
         foreach (object child in LogicalTreeHelper.GetChildren(node))

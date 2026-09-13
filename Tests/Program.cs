@@ -64,6 +64,12 @@ bool shortNoteRejected = false;
 try { PlaybackValidation.ValidateGap("20", ScoreParser.Parse("1__", true), 200); }
 catch (FormatException) { shortNoteRejected = true; }
 Expect(shortNoteRejected, "预览与播放共用最短音校验");
+var middleC = new ScoreNote(1, 0, false, 0);
+Expect(Math.Abs(ToneOutput.Frequency(middleC) - 261.626) < .01, "播放测试的中音1为C4");
+Expect(Math.Abs(ToneOutput.Frequency(middleC with { Octave = 1 }) / ToneOutput.Frequency(middleC) - 2) < .0001,
+    "高音区频率翻倍");
+Expect(Math.Abs(ToneOutput.Frequency(middleC with { Sharp = true }) / ToneOutput.Frequency(middleC) - Math.Pow(2, 1 / 12.0)) < .0001,
+    "升半音频率正确");
 Console.WriteLine($"PASS: {passed} tests");
 
 void RejectHotkey(Action action, string name)
