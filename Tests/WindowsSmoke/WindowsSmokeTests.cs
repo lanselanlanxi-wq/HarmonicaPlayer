@@ -18,7 +18,7 @@ public static class WindowsSmokeTests
         {
             try
             {
-                foreach (string test in new[] { "idle", "pending-save", "countdown", "playback" })
+                foreach (string test in new[] { "idle", "pending-save", "countdown", "playback", "test-playback" })
                 {
                     string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "HarmonicaPlayerSmoke-" + Guid.NewGuid().ToString("N") + ".json");
                     PlayerWindow? window = null;
@@ -35,13 +35,20 @@ public static class WindowsSmokeTests
                             var number = Descendants(window).OfType<TextBox>().First(t => t.Text == "300" && !t.IsReadOnly);
                             number.Text = "350";
                         }
-                        if (test is "countdown" or "playback")
+                        if (test is "countdown" or "playback" or "test-playback")
                         {
                             var dry = Descendants(window).OfType<CheckBox>().Single(c => c.Content?.ToString()?.StartsWith("仅日志测试") == true);
                             if (dry.IsChecked != true) throw new Exception("Dry-run default is off.");
-                            var start = Descendants(window).OfType<Button>().Single(b => b.Content?.ToString()?.StartsWith("开始 ") == true);
-                            start.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                            string buttonLabel = test == "test-playback" ? "播放测试" : "开始 ";
+                            if (test == "test-playback") dry.IsChecked = false;
+                            var play = Descendants(window).OfType<Button>().Single(b => b.Content?.ToString()?.StartsWith(buttonLabel) == true);
+                            play.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                             await Task.Delay(test == "countdown" ? 100 : 3400);
+                            if (test == "test-playback")
+                            {
+                                var log = Descendants(window).OfType<TextBox>().Single(t => t.IsReadOnly && t.Height == 110);
+                                if (string.IsNullOrWhiteSpace(log.Text)) throw new Exception("Test playback did not produce a log entry.");
+                            }
                         }
                         var clock = Stopwatch.StartNew();
                         window.Close();

@@ -26,6 +26,7 @@ public sealed class PlayerWindow : Window
     private readonly TextBlock status = new() { Text = "就绪：先导入谱面，快捷键状态见上方。", TextWrapping = TextWrapping.Wrap };
     private readonly TextBox log = new() { IsReadOnly = true, Height = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly Button start = new() { Content = "开始 F6", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
+    private readonly Button playTest = new() { Content = "播放测试", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
     private readonly Button import = new() { Content = "导入 TXT", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
     private readonly CheckBox rhythm = new() { Content = "节奏模式（按拍数播放；忽略空格/换行额外停顿）", IsChecked = false };
     private readonly TextBox bpm = new() { Text = "120", Width = 75 };
@@ -59,7 +60,7 @@ public sealed class PlayerWindow : Window
         panel.Children.Add(new TextBlock { Text = "TXT → 单音口琴演奏", FontSize = 23 });
         panel.Children.Add(new TextBlock { Text = "【高音】 （低音） #升半音；0休止，-或—延长一拍，_半拍，__四分之一拍，.附点。例：1 2_ 3_ 5 — | 0 6. 5_ 1 |", Margin = new Thickness(0, 10, 0, 10), TextWrapping = TextWrapping.Wrap });
         var controls = new WrapPanel { Orientation = Orientation.Horizontal };
-        controls.Children.Add(import); controls.Children.Add(refresh); controls.Children.Add(start);
+        controls.Children.Add(import); controls.Children.Add(refresh); controls.Children.Add(playTest); controls.Children.Add(start);
         controls.Children.Add(stop); panel.Children.Add(controls);
         var shortcuts = new StackPanel { Orientation = Orientation.Horizontal };
         shortcuts.Children.Add(configure); shortcuts.Children.Add(retry); panel.Children.Add(shortcuts);
@@ -95,7 +96,9 @@ public sealed class PlayerWindow : Window
         previewTimer.Tick += (_, _) => { previewTimer.Stop(); Preview(); };
         configure.Click += (_, _) => ConfigureHotkeys();
         retry.Click += (_, _) => ApplyHotkeys();
-        import.Click += (_, _) => Import(); start.Click += async (_, _) => await Begin();
+        import.Click += (_, _) => Import();
+        playTest.Click += async (_, _) => await Begin(forceSimulation: true);
+        start.Click += async (_, _) => await Begin();
         stop.Click += (_, _) => Stop();
         refresh.Click += (_, _) => Preview();
         rhythm.Checked += (_, _) => { SetBusy(false); Preview(); QueueSave(); };
@@ -275,7 +278,7 @@ public sealed class PlayerWindow : Window
         if (cancellation != null) status.Text = "正在停止并释放输入…";
         else { var error = output.Release(); status.Text = error ?? "已停止。"; }
     }
-    private async Task Begin(uint triggerKey = 0)
+    private async Task Begin(uint triggerKey = 0, bool forceSimulation = false)
     {
         if (cancellation != null || closing || beginning || editingHotkeys) return;
         beginning = true; SetBusy(true);
@@ -284,7 +287,7 @@ public sealed class PlayerWindow : Window
             var notes = ScoreParser.Parse(score.Text, rhythm.IsChecked == true);
             var (ms, spaceMs, lineMs) = Timing();
             int silence = PlaybackValidation.ValidateGap(gap.Text, notes, ms);
-            bool simulation = dry.IsChecked == true;
+            bool simulation = forceSimulation || dry.IsChecked == true;
             if (!simulation && hotkeys?.StopReady != true)
                 throw new InvalidOperationException($"停止键 {settings.Stop.Label} 不可用，禁止真实演奏。请点击“自定义快捷键”或“重试注册”。");
             cancellation = new CancellationTokenSource();
@@ -339,7 +342,7 @@ public sealed class PlayerWindow : Window
     private void SetBusy(bool busy)
     {
         busy |= closing;
-        start.IsEnabled = import.IsEnabled = refresh.IsEnabled = rhythm.IsEnabled = gap.IsEnabled = dry.IsEnabled = !busy;
+        start.IsEnabled = playTest.IsEnabled = import.IsEnabled = refresh.IsEnabled = rhythm.IsEnabled = gap.IsEnabled = dry.IsEnabled = !busy;
         bool useRhythm = rhythm.IsChecked == true;
         bpm.IsEnabled = !busy && useRhythm;
         duration.IsEnabled = spaceGap.IsEnabled = lineGap.IsEnabled = !busy && !useRhythm;
