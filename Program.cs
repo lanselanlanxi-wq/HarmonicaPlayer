@@ -103,6 +103,7 @@ public sealed class PlayerWindow : Window
         score.TextChanged += (_, _) => QueuePreview();
         bpm.TextChanged += (_, _) => QueuePreview();
         duration.TextChanged += (_, _) => QueuePreview();
+        gap.TextChanged += (_, _) => QueuePreview();
         spaceGap.TextChanged += (_, _) => QueuePreview();
         lineGap.TextChanged += (_, _) => QueuePreview();
         foreach (var box in new[] { bpm, duration, gap, spaceGap, lineGap })
@@ -282,9 +283,7 @@ public sealed class PlayerWindow : Window
         {
             var notes = ScoreParser.Parse(score.Text, rhythm.IsChecked == true);
             var (ms, spaceMs, lineMs) = Timing();
-            if (!int.TryParse(gap.Text, out int silence) || silence < 10 || silence > 5000 ||
-                notes.Any(n => n.Degree != 0 && n.Beats * ms - silence < 40))
-                throw new FormatException("留白范围10～5000毫秒；最短音减去留白后须至少40毫秒。请降低速度或减少留白。");
+            int silence = PlaybackValidation.ValidateGap(gap.Text, notes, ms);
             bool simulation = dry.IsChecked == true;
             if (!simulation && hotkeys?.StopReady != true)
                 throw new InvalidOperationException($"停止键 {settings.Stop.Label} 不可用，禁止真实演奏。请点击“自定义快捷键”或“重试注册”。");
@@ -323,6 +322,7 @@ public sealed class PlayerWindow : Window
         {
             var notes = ScoreParser.Parse(score.Text, rhythm.IsChecked == true);
             var (ms, space, line) = Timing();
+            PlaybackValidation.ValidateGap(gap.Text, notes, ms);
             double total = 0;
             var lines = new StringBuilder();
             foreach (var note in notes)

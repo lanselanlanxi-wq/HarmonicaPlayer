@@ -51,6 +51,19 @@ foreach (string invalid in new[] {"-1", "_1", "1___", "1..", "1-_", "1._", "1 | 
 bool legacyRejects = false;
 try { ScoreParser.Parse("1-", false); } catch (FormatException) { legacyRejects = true; }
 Expect(legacyRejects, "旧模式不静默忽略节奏标记");
+Expect(PlaybackValidation.ValidateGap("20", ScoreParser.Parse("1_", true), 500) == 20,
+    "预览与播放共用有效留白校验");
+foreach (string invalidGap in new[] { "", "9", "5001" })
+{
+    bool rejected = false;
+    try { PlaybackValidation.ValidateGap(invalidGap, ScoreParser.Parse("1"), 300); }
+    catch (FormatException) { rejected = true; }
+    Expect(rejected, "预览与播放共用留白范围校验: " + invalidGap);
+}
+bool shortNoteRejected = false;
+try { PlaybackValidation.ValidateGap("20", ScoreParser.Parse("1__", true), 200); }
+catch (FormatException) { shortNoteRejected = true; }
+Expect(shortNoteRejected, "预览与播放共用最短音校验");
 Console.WriteLine($"PASS: {passed} tests");
 
 void RejectHotkey(Action action, string name)
