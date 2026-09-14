@@ -44,13 +44,13 @@ public static class WindowsSmokeTests
                             if (test == "test-playback") dry.IsChecked = false;
                             var play = Descendants(window).OfType<Button>().Single(b => b.Content?.ToString()?.StartsWith(buttonLabel) == true);
                             play.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                            await Task.Delay(test == "countdown" ? 100 : 3400);
                             if (test == "test-playback")
                             {
                                 var log = Descendants(window).OfType<TextBox>().Single(t => t.IsReadOnly && t.Height == 110);
-                                if (string.IsNullOrWhiteSpace(log.Text)) throw new Exception("Test playback did not produce a log entry.");
-                                if (audio.StartCount == 0) throw new Exception("Test playback did not start preview audio.");
+                                await WaitUntilAsync(() => !string.IsNullOrWhiteSpace(log.Text) && audio.StartCount > 0,
+                                    TimeSpan.FromSeconds(7), "Test playback did not produce log and audio events.");
                             }
+                            else await Task.Delay(test == "countdown" ? 100 : 3400);
                         }
                         var clock = Stopwatch.StartNew();
                         window.Close();
@@ -73,9 +73,20 @@ public static class WindowsSmokeTests
 
     private sealed class FakeToneOutput : IToneOutput
     {
-        public int StartCount { get; private set; }
-        public void Start(ScoreNote note) => StartCount++;
+        private int startCount;
+        public int StartCount => Volatile.Read(ref startCount);
+        public void Start(ScoreNote note) => Interlocked.Increment(ref startCount);
         public void Stop() { }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout, string error)
+    {
+        var clock = Stopwatch.StartNew();
+        while (!condition())
+        {
+            if (clock.Elapsed >= timeout) throw new TimeoutException(error);
+            await Task.Delay(50);
+        }
     }
 
     private static IEnumerable<DependencyObject> Descendants(DependencyObject node)
