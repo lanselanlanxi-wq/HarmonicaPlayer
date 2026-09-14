@@ -26,6 +26,7 @@ public sealed class PlayerWindow : Window
     private readonly TextBlock status = new() { Text = "就绪：先导入谱面，快捷键状态见上方。", TextWrapping = TextWrapping.Wrap };
     private readonly TextBox log = new() { IsReadOnly = true, Height = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly Button start = new() { Content = "开始 F6", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
+    private readonly Button playTest = new() { Content = "播放测试", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
     private readonly Button import = new() { Content = "导入 TXT", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
     private readonly CheckBox rhythm = new() { Content = "节奏模式（按拍数播放；忽略空格/换行额外停顿）", IsChecked = false };
     private readonly TextBox bpm = new() { Text = "120", Width = 75 };
@@ -38,6 +39,7 @@ public sealed class PlayerWindow : Window
     private readonly string settingsPath;
     private readonly DispatcherTimer previewTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly NativeInput output = new();
+    private readonly IToneOutput audio;
     private HwndSource? source;
     private IntPtr hwnd;
     private bool allowClose, closing, editingHotkeys, beginning;
@@ -50,8 +52,9 @@ public sealed class PlayerWindow : Window
     private readonly Button retry = new() { Content = "重试注册", Margin = new Thickness(5), Padding = new Thickness(10, 6, 10, 6) };
     private readonly Button stop = new() { Content = "停止 F8", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
 
-    public PlayerWindow(string? settingsFile = null)
+    public PlayerWindow(string? settingsFile = null, IToneOutput? testAudio = null)
     {
+        audio = testAudio ?? new ToneOutput();
         settingsPath = settingsFile ?? SettingsStore.DefaultPath;
         Title = "口琴简谱播放器 0.1.5"; Width = 740; Height = 900; MinWidth = 600; MinHeight = 600;
         var panel = new StackPanel { Margin = new Thickness(18) };
@@ -59,7 +62,7 @@ public sealed class PlayerWindow : Window
         panel.Children.Add(new TextBlock { Text = "TXT → 单音口琴演奏", FontSize = 23 });
         panel.Children.Add(new TextBlock { Text = "【高音】 （低音） #升半音；0休止，-或—延长一拍，_半拍，__四分之一拍，.附点。例：1 2_ 3_ 5 — | 0 6. 5_ 1 |", Margin = new Thickness(0, 10, 0, 10), TextWrapping = TextWrapping.Wrap });
         var controls = new WrapPanel { Orientation = Orientation.Horizontal };
-        controls.Children.Add(import); controls.Children.Add(refresh); controls.Children.Add(start);
+        controls.Children.Add(import); controls.Children.Add(refresh); controls.Children.Add(playTest); controls.Children.Add(start);
         controls.Children.Add(stop); panel.Children.Add(controls);
         var shortcuts = new StackPanel { Orientation = Orientation.Horizontal };
         shortcuts.Children.Add(configure); shortcuts.Children.Add(retry); panel.Children.Add(shortcuts);
@@ -95,7 +98,9 @@ public sealed class PlayerWindow : Window
         previewTimer.Tick += (_, _) => { previewTimer.Stop(); Preview(); };
         configure.Click += (_, _) => ConfigureHotkeys();
         retry.Click += (_, _) => ApplyHotkeys();
-        import.Click += (_, _) => Import(); start.Click += async (_, _) => await Begin();
+        import.Click += (_, _) => Import();
+        playTest.Click += async (_, _) => await Begin(forceSimulation: true, playAudio: true);
+        start.Click += async (_, _) => await Begin();
         stop.Click += (_, _) => Stop();
         refresh.Click += (_, _) => Preview();
         rhythm.Checked += (_, _) => { SetBusy(false); Preview(); QueueSave(); };
@@ -103,6 +108,7 @@ public sealed class PlayerWindow : Window
         score.TextChanged += (_, _) => QueuePreview();
         bpm.TextChanged += (_, _) => QueuePreview();
         duration.TextChanged += (_, _) => QueuePreview();
+        gap.TextChanged += (_, _) => QueuePreview();
         spaceGap.TextChanged += (_, _) => QueuePreview();
         lineGap.TextChanged += (_, _) => QueuePreview();
         foreach (var box in new[] { bpm, duration, gap, spaceGap, lineGap })
@@ -144,6 +150,7 @@ public sealed class PlayerWindow : Window
                 catch (Exception e) { status.Text = "演奏结束异常：" + e.Message; }
             }
             // No background note sender remains before final cleanup begins.
+            audio.Stop();
             string? releaseError = await Task.Run(output.Release);
             if (releaseError != null)
             {
@@ -271,10 +278,11 @@ public sealed class PlayerWindow : Window
     {
         if (closing) return; // Shutdown owns final input cleanup; do not race it.
         cancellation?.Cancel();
+        audio.Stop();
         if (cancellation != null) status.Text = "正在停止并释放输入…";
         else { var error = output.Release(); status.Text = error ?? "已停止。"; }
     }
-    private async Task Begin(uint triggerKey = 0)
+    private async Task Begin(uint triggerKey = 0, bool forceSimulation = false, bool playAudio = false)
     {
         if (cancellation != null || closing || beginning || editingHotkeys) return;
         beginning = true; SetBusy(true);
@@ -282,17 +290,15 @@ public sealed class PlayerWindow : Window
         {
             var notes = ScoreParser.Parse(score.Text, rhythm.IsChecked == true);
             var (ms, spaceMs, lineMs) = Timing();
-            if (!int.TryParse(gap.Text, out int silence) || silence < 10 || silence > 5000 ||
-                notes.Any(n => n.Degree != 0 && n.Beats * ms - silence < 40))
-                throw new FormatException("留白范围10～5000毫秒；最短音减去留白后须至少40毫秒。请降低速度或减少留白。");
-            bool simulation = dry.IsChecked == true;
+            int silence = PlaybackValidation.ValidateGap(gap.Text, notes, ms);
+            bool simulation = forceSimulation || dry.IsChecked == true;
             if (!simulation && hotkeys?.StopReady != true)
                 throw new InvalidOperationException($"停止键 {settings.Stop.Label} 不可用，禁止真实演奏。请点击“自定义快捷键”或“重试注册”。");
             cancellation = new CancellationTokenSource();
             if (closing || cancellation.IsCancellationRequested) return;
             _ = SaveCurrentSettingsAsync();
             SetBusy(true); log.Clear();
-            running = Run(notes, ms, silence, spaceMs, lineMs, simulation, triggerKey, cancellation.Token);
+            running = Run(notes, ms, silence, spaceMs, lineMs, simulation, playAudio, triggerKey, cancellation.Token);
             await running;
         }
         catch (Exception e) { status.Text = e.Message; }
@@ -323,6 +329,7 @@ public sealed class PlayerWindow : Window
         {
             var notes = ScoreParser.Parse(score.Text, rhythm.IsChecked == true);
             var (ms, space, line) = Timing();
+            PlaybackValidation.ValidateGap(gap.Text, notes, ms);
             double total = 0;
             var lines = new StringBuilder();
             foreach (var note in notes)
@@ -339,14 +346,15 @@ public sealed class PlayerWindow : Window
     private void SetBusy(bool busy)
     {
         busy |= closing;
-        start.IsEnabled = import.IsEnabled = refresh.IsEnabled = rhythm.IsEnabled = gap.IsEnabled = dry.IsEnabled = !busy;
+        start.IsEnabled = playTest.IsEnabled = import.IsEnabled = refresh.IsEnabled = rhythm.IsEnabled = gap.IsEnabled = dry.IsEnabled = !busy;
         bool useRhythm = rhythm.IsChecked == true;
         bpm.IsEnabled = !busy && useRhythm;
         duration.IsEnabled = spaceGap.IsEnabled = lineGap.IsEnabled = !busy && !useRhythm;
         configure.IsEnabled = retry.IsEnabled = !busy;
         score.IsReadOnly = busy;
     }
-    private async Task Run(List<ScoreNote> notes, double ms, int silence, int spaceMs, int lineMs, bool simulation, uint triggerKey, CancellationToken token)
+    private async Task Run(List<ScoreNote> notes, double ms, int silence, int spaceMs, int lineMs,
+        bool simulation, bool playAudio, uint triggerKey, CancellationToken token)
     {
         string result = "演奏完成。";
         try
@@ -411,11 +419,13 @@ public sealed class PlayerWindow : Window
                     }));
                     if (note.Degree != 0)
                     {
+                        if (playAudio) audio.Start(note);
                         if (!simulation) output.Modifiers(note);
                         Wait(begin + 12); Check();
                         if (!simulation) output.NoteOn(note);
                         Wait(begin + noteMs - silence);
                         var error = simulation ? null : output.Release();
+                        if (playAudio) audio.Stop();
                         if (error != null) throw new InvalidOperationException(error);
                     }
                     Wait(begin + noteMs);
@@ -427,6 +437,7 @@ public sealed class PlayerWindow : Window
         catch (Exception e) { result = "已停止：" + e.Message; }
         finally
         {
+            audio.Stop();
             // 工作任务已退出，再做最终释放，避免释放之后仍有旧任务按键。
             var error = simulation ? null : await Task.Run(output.Release);
             if (!closing) status.Text = error == null ? result : result + " 释放失败，请手动按下并松开相关键：" + error;

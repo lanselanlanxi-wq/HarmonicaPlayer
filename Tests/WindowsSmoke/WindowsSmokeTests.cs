@@ -18,13 +18,14 @@ public static class WindowsSmokeTests
         {
             try
             {
-                foreach (string test in new[] { "idle", "pending-save", "countdown", "playback" })
+                foreach (string test in new[] { "idle", "pending-save", "countdown", "playback", "test-playback" })
                 {
                     string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "HarmonicaPlayerSmoke-" + Guid.NewGuid().ToString("N") + ".json");
                     PlayerWindow? window = null;
                     try
                     {
-                        window = new PlayerWindow(path);
+                        var audio = new FakeToneOutput();
+                        window = new PlayerWindow(path, audio);
                         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                         window.Closed += (_, _) => closed.TrySetResult();
                         window.Show();
@@ -35,13 +36,21 @@ public static class WindowsSmokeTests
                             var number = Descendants(window).OfType<TextBox>().First(t => t.Text == "300" && !t.IsReadOnly);
                             number.Text = "350";
                         }
-                        if (test is "countdown" or "playback")
+                        if (test is "countdown" or "playback" or "test-playback")
                         {
                             var dry = Descendants(window).OfType<CheckBox>().Single(c => c.Content?.ToString()?.StartsWith("仅日志测试") == true);
                             if (dry.IsChecked != true) throw new Exception("Dry-run default is off.");
-                            var start = Descendants(window).OfType<Button>().Single(b => b.Content?.ToString()?.StartsWith("开始 ") == true);
-                            start.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                            await Task.Delay(test == "countdown" ? 100 : 3400);
+                            string buttonLabel = test == "test-playback" ? "播放测试" : "开始 ";
+                            if (test == "test-playback") dry.IsChecked = false;
+                            var play = Descendants(window).OfType<Button>().Single(b => b.Content?.ToString()?.StartsWith(buttonLabel) == true);
+                            play.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                            if (test == "test-playback")
+                            {
+                                var log = Descendants(window).OfType<TextBox>().Single(t => t.IsReadOnly && t.Height == 110);
+                                await WaitUntilAsync(() => !string.IsNullOrWhiteSpace(log.Text) && audio.StartCount > 0,
+                                    TimeSpan.FromSeconds(7), "Test playback did not produce log and audio events.");
+                            }
+                            else await Task.Delay(test == "countdown" ? 100 : 3400);
                         }
                         var clock = Stopwatch.StartNew();
                         window.Close();
@@ -61,6 +70,25 @@ public static class WindowsSmokeTests
         app.Run();
         return failures == 0 ? 0 : 1;
     }
+
+    private sealed class FakeToneOutput : IToneOutput
+    {
+        private int startCount;
+        public int StartCount => Volatile.Read(ref startCount);
+        public void Start(ScoreNote note) => Interlocked.Increment(ref startCount);
+        public void Stop() { }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout, string error)
+    {
+        var clock = Stopwatch.StartNew();
+        while (!condition())
+        {
+            if (clock.Elapsed >= timeout) throw new TimeoutException(error);
+            await Task.Delay(50);
+        }
+    }
+
     private static IEnumerable<DependencyObject> Descendants(DependencyObject node)
     {
         foreach (object child in LogicalTreeHelper.GetChildren(node))

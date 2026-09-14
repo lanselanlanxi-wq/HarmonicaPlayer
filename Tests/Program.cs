@@ -51,6 +51,25 @@ foreach (string invalid in new[] {"-1", "_1", "1___", "1..", "1-_", "1._", "1 | 
 bool legacyRejects = false;
 try { ScoreParser.Parse("1-", false); } catch (FormatException) { legacyRejects = true; }
 Expect(legacyRejects, "旧模式不静默忽略节奏标记");
+Expect(PlaybackValidation.ValidateGap("20", ScoreParser.Parse("1_", true), 500) == 20,
+    "预览与播放共用有效留白校验");
+foreach (string invalidGap in new[] { "", "9", "5001" })
+{
+    bool rejected = false;
+    try { PlaybackValidation.ValidateGap(invalidGap, ScoreParser.Parse("1"), 300); }
+    catch (FormatException) { rejected = true; }
+    Expect(rejected, "预览与播放共用留白范围校验: " + invalidGap);
+}
+bool shortNoteRejected = false;
+try { PlaybackValidation.ValidateGap("20", ScoreParser.Parse("1__", true), 200); }
+catch (FormatException) { shortNoteRejected = true; }
+Expect(shortNoteRejected, "预览与播放共用最短音校验");
+var middleC = new ScoreNote(1, 0, false, 0);
+Expect(Math.Abs(ToneOutput.Frequency(middleC) - 261.626) < .01, "播放测试的中音1为C4");
+Expect(Math.Abs(ToneOutput.Frequency(middleC with { Octave = 1 }) / ToneOutput.Frequency(middleC) - 2) < .0001,
+    "高音区频率翻倍");
+Expect(Math.Abs(ToneOutput.Frequency(middleC with { Sharp = true }) / ToneOutput.Frequency(middleC) - Math.Pow(2, 1 / 12.0)) < .0001,
+    "升半音频率正确");
 Console.WriteLine($"PASS: {passed} tests");
 
 void RejectHotkey(Action action, string name)
