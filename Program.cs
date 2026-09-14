@@ -43,6 +43,7 @@ public sealed class PlayerWindow : Window
     private bool allowClose, closing, editingHotkeys, beginning;
     private HotkeyController? hotkeys;
     private AppSettings settings = new();
+    private long saveGeneration;
     private readonly DispatcherTimer saveTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly TextBlock settingsStatus = new() { TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock hotkeyStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 6) };
@@ -195,6 +196,7 @@ public sealed class PlayerWindow : Window
     }
     private async Task SaveCurrentSettingsAsync(bool preserveValidTiming = false)
     {
+        long generation = ++saveGeneration;
         AppSettings next = settings;
         string? invalid = null;
         if (!int.TryParse(bpm.Text, out int tempo) || !int.TryParse(duration.Text, out int ms) ||
@@ -211,8 +213,9 @@ public sealed class PlayerWindow : Window
         if (invalid != null && !preserveValidTiming)
         { settingsStatus.Text = invalid; return; }
         settings = next; // Update the in-memory snapshot before asynchronous disk work.
+        if (generation != saveGeneration) return;
         string? error = await settingsWriter.SaveAsync(next);
-        if (settings != next) return; // Do not overwrite a newer save's status.
+        if (generation != saveGeneration || settings != next) return; // Do not enqueue or report stale saves.
         settingsStatus.Text = error != null ? "设置未保存：" + error :
             invalid ?? "设置已保存（快捷键、节奏模式、速度和停顿）。";
     }
