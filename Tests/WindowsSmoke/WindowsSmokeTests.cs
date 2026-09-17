@@ -18,7 +18,7 @@ public static class WindowsSmokeTests
         {
             try
             {
-                foreach (string test in new[] { "idle", "pending-save", "countdown", "playback" })
+                foreach (string test in new[] { "idle", "pending-save", "countdown", "playback", "error-recovery" })
                 {
                     string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "HarmonicaPlayerSmoke-" + Guid.NewGuid().ToString("N") + ".json");
                     PlayerWindow? window = null;
@@ -29,11 +29,38 @@ public static class WindowsSmokeTests
                         window.Closed += (_, _) => closed.TrySetResult();
                         window.Show();
                         await Task.Delay(100);
+                        if (test == "error-recovery")
+                        {
+                            var editor = Descendants(window).OfType<TextBox>().Single(t => t.AcceptsReturn && !t.IsReadOnly);
+                            var startButton = Descendants(window).OfType<Button>().Single(b => b.Content?.ToString()?.StartsWith("开始 ") == true);
+                            var locate = Descendants(window).OfType<Button>().Single(b => b.Content?.ToString() == "定位曲谱错误");
+                            editor.Text = "1\n8";
+                            await Task.Delay(300);
+                            if (startButton.IsEnabled || !locate.IsEnabled) throw new Exception("Invalid score did not disable start/enable location.");
+                            locate.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                            if (editor.SelectionStart != 2 || editor.SelectionLength != 1) throw new Exception("Error location is incorrect.");
+                            var bindingFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                            await (Task)typeof(PlayerWindow).GetMethod("Begin", bindingFlags)!.Invoke(window, new object[] { (uint)0 })!;
+                            editor.Text = "1 2";
+                            await Task.Delay(300);
+                            if (!startButton.IsEnabled || locate.IsEnabled) throw new Exception("Corrected score did not restore controls.");
+                            if (typeof(PlayerWindow).GetField("scoreIssue", bindingFlags)!.GetValue(window) != null ||
+                                typeof(PlayerWindow).GetField("operationIssue", bindingFlags)!.GetValue(window) != null)
+                                throw new Exception("Corrected score left a stale error.");
+                            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                            var controller = (HotkeyController)typeof(PlayerWindow).GetField("hotkeys", flags)!.GetValue(window)!;
+                            controller.Suspend();
+                            var dryBox = Descendants(window).OfType<CheckBox>().Single();
+                            dryBox.IsChecked = false;
+                            if (startButton.IsEnabled) throw new Exception("Real playback allowed without stop hotkey.");
+                            dryBox.IsChecked = true;
+                            if (!startButton.IsEnabled) throw new Exception("Dry run unnecessarily blocked by stop hotkey.");
+                        }
                         if (test == "pending-save")
                         {
                             // A valid numeric edit queues the real debounced settings saver.
-                            var number = Descendants(window).OfType<TextBox>().First(t => t.Text == "300" && !t.IsReadOnly);
-                            number.Text = "350";
+                            var number = Descendants(window).OfType<TextBox>().First(t => t.Text == "120" && !t.IsReadOnly);
+                            number.Text = "110";
                         }
                         if (test is "countdown" or "playback")
                         {

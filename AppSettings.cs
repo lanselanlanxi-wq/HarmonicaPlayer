@@ -7,19 +7,14 @@ public sealed record AppSettings
 {
     public HotkeyBinding Start { get; init; } = HotkeyBinding.DefaultStart;
     public HotkeyBinding Stop { get; init; } = HotkeyBinding.DefaultStop;
-    public bool Rhythm { get; init; }
     public int Bpm { get; init; } = 120;
-    public int Duration { get; init; } = 300;
     public int Gap { get; init; } = 20;
-    public int SpaceGap { get; init; } = 100;
-    public int LineGap { get; init; } = 300;
 
     public void Validate()
     {
         if (Start is null || Stop is null) throw new FormatException("缺少快捷键设置。");
         HotkeyBinding.ValidatePair(Start, Stop);
-        if (Bpm is < 20 or > 300 || Duration is < 80 or > 5000 || Gap is < 10 or > 5000 ||
-            SpaceGap is < 0 or > 10000 || LineGap is < 0 or > 10000)
+        if (Bpm is < 20 or > 300 || Gap is < 10 or > 5000)
             throw new FormatException("设置数值超出允许范围。");
     }
 }

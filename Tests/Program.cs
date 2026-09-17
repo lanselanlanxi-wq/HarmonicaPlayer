@@ -19,38 +19,19 @@ foreach (string invalid in new[] {"", "【1", "1】", "（1)", "#", "##1", "#0",
     try { ScoreParser.Parse(invalid); } catch (FormatException) { rejected = true; }
     Expect(rejected, "拒绝非法谱: " + invalid);
 }
-int[] Pauses(string text) => ScoreParser.Parse(text).Select(n => n.PauseBefore(100, 300)).ToArray();
-Expect(Pauses("12").SequenceEqual(new[] {0, 0}), "连写不加停顿");
-Expect(Pauses("1 2").SequenceEqual(new[] {0, 100}), "单空格停顿");
-Expect(Pauses("1   \t　2").SequenceEqual(new[] {0, 100}), "连续空白合并");
-Expect(Pauses("1 \r\n 2").SequenceEqual(new[] {0, 300}), "CRLF与空格不叠加");
-Expect(Pauses("1\n\n \n2").SequenceEqual(new[] {0, 300}), "连续空行合并");
-Expect(Pauses(" \n1 \n").SequenceEqual(new[] {0}), "忽略首尾空白");
-Expect(Pauses("【1 21】").SequenceEqual(new[] {0, 100, 0}), "括号内部空格");
-Expect(Pauses("1 【2】 3").SequenceEqual(new[] {0, 100, 100}), "跨括号分组");
-Expect(Pauses("1\n【 2】").SequenceEqual(new[] {0, 300}), "跨括号换行优先");
-Expect(Pauses("1 # 2").SequenceEqual(new[] {0, 100}), "跨半音标记空格合并");
-Expect(ScoreParser.Parse("1 2\n3").All(n => n.PauseBefore(0, 0) == 0), "关闭两种停顿");
-Expect(Pauses("1 0\n2").SequenceEqual(new[] {0, 100, 300}), "显式休止保留分隔停顿");
-var timeline = new List<int>(); int time = 0;
-foreach (var n in ScoreParser.Parse("12 3\n4"))
-{ time += n.PauseBefore(100, 300); timeline.Add(time); time += 300; }
-Expect(timeline.SequenceEqual(new[] {0, 300, 700, 1300}) && time == 1600, "额外停顿计入绝对时间线");
-var rhythm = ScoreParser.Parse("1 2_ 3__ 4. 5_. 6 — — 0_ 0 -", true);
+Expect(ScoreParser.Parse("1 2\n3").Sum(n => n.Beats) == 3, "空格换行不增加拍数");
+var rhythm = ScoreParser.Parse("1 2_ 3__ 4. 5_. 6 — — 0_ 0 -");
 Expect(rhythm.Select(n => n.Beats).SequenceEqual(new[] {1.0, .5, .25, 1.5, .75, 3.0, .5, 2.0}), "完整时值解析");
 Expect(rhythm.Count == 8 && rhythm[5].Degree == 6, "延长不生成重复音");
 Expect(rhythm[^1].Degree == 0 && rhythm[^1].Beats == 2, "休止延长");
-Expect(ScoreParser.Parse("【#1_.】 （2）-", true).Select(n => n.Beats).SequenceEqual(new[] {.75, 2.0}), "音区半音与时值组合");
-Expect(ScoreParser.Parse("1 2_ 3_ 5 — | 0 6. 5_ 1 |", true).Sum(n => n.Beats) * 500 == 4000, "120速度八拍为四秒");
+Expect(ScoreParser.Parse("【#1_.】 （2）-").Select(n => n.Beats).SequenceEqual(new[] {.75, 2.0}), "音区半音与时值组合");
+Expect(ScoreParser.Parse("1 2_ 3_ 5 — | 0 6. 5_ 1 |").Sum(n => n.Beats) * 500 == 4000, "120速度八拍为四秒");
 foreach (string invalid in new[] {"-1", "_1", "1___", "1..", "1-_", "1._", "1 | -", "#-1", "1-.", "0" + new string('-', 64)})
 {
     bool rejected = false;
-    try { ScoreParser.Parse(invalid, true); } catch (FormatException) { rejected = true; }
+    try { ScoreParser.Parse(invalid); } catch (FormatException) { rejected = true; }
     Expect(rejected, "拒绝非法时值: " + invalid);
 }
-bool legacyRejects = false;
-try { ScoreParser.Parse("1-", false); } catch (FormatException) { legacyRejects = true; }
-Expect(legacyRejects, "旧模式不静默忽略节奏标记");
 Console.WriteLine($"PASS: {passed} tests");
 
 void RejectHotkey(Action action, string name)
@@ -96,7 +77,7 @@ try
 {
     var defaults = SettingsStore.Load(settingsPath, out var warning);
     Expect(warning == null && defaults.Start == HotkeyBinding.DefaultStart, "缺少设置使用默认值");
-    var custom = new AppSettings { Start = new(0x75, 2), Stop = new(0x77, 4), Rhythm = true, Bpm = 90, Gap = 10, Duration = 450, SpaceGap = 80, LineGap = 150 };
+    var custom = new AppSettings { Start = new(0x75, 2), Stop = new(0x77, 4), Bpm = 90, Gap = 10 };
     SettingsStore.Save(settingsPath, custom);
     Expect(SettingsStore.Load(settingsPath, out warning) == custom && warning == null, "快捷键和时间设置往返保存");
     var changed = custom with { Bpm = 100 };
@@ -151,6 +132,43 @@ var retryWriter = new SettingsWriter(_ =>
 Expect((await retryWriter.SaveAsync(initial))?.Contains("Simulated") == true, "后台保存错误返回给界面");
 Expect(await retryWriter.SaveAsync(initial) == null && attempts == 2, "相同值写入失败后可重试");
 Console.WriteLine($"PASS TOTAL: {passed} tests including async settings writer");
+
+// v0.2.0: explicit durations and highest do; no native input is sent.
+var customNotes = ScoreParser.Parse("5:1.25 【1】:2.5 0:0.25 【【1】】:1.25 2");
+Expect(customNotes.Count == 5, "指定时值不产生额外音符");
+Expect(customNotes.Select(n => n.Beats).SequenceEqual(new[] {1.25, 2.5, .25, 1.25, 1.0}), "指定时值及重置");
+Expect(customNotes[3].Octave == 2 && customNotes[4].Octave == 0, "最高do音区正确恢复");
+Expect(ScoreParser.Parse("【【1】】_.").Single().Beats == .75, "最高do兼容旧时值符号");
+Expect(ScoreParser.Parse("5:1.25 | 0:0.25 1:2.5").Sum(n => n.Beats) == 4, "自定义四拍时间线");
+Expect(ScoreParser.Parse("0:64").Single().Beats == 64, "支持64拍上限");
+foreach (string bad in new[] {"【【2】】", "【【#1】】", "【【1】", "【【11】】", "【【1_】】", "5:0", "5:-1", "5:65", "5:", "5:1.2.3", "5:1.", "5_:1.25", "5.:2", "5:1.25_", "5:1.25 —", "5:1:2", "5 | :1.25"})
+{
+    bool rejected = false;
+    try { ScoreParser.Parse(bad); } catch (FormatException) { rejected = true; }
+    Expect(rejected, "拒绝含糊或非法新格式: " + bad);
+}
+var oldCulture = System.Globalization.CultureInfo.CurrentCulture;
+try
+{
+    System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("fr-FR");
+    Expect(ScoreParser.Parse("5:1.25").Single().Beats == 1.25, "小数点不受系统区域设置影响");
+}
+finally { System.Globalization.CultureInfo.CurrentCulture = oldCulture; }
+try { ScoreParser.Parse("1\n8"); Expect(false, "非法符号必须报错"); }
+catch (FormatException e) { Expect(e.Message.Contains("第2行、第1列"), "错误定位到行列"); }
+string legacyPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
+try
+{
+    File.WriteAllText(legacyPath, "{\"Rhythm\":false,\"Duration\":0,\"SpaceGap\":-1,\"LineGap\":-1,\"Bpm\":95,\"Gap\":15}");
+    var migrated = SettingsStore.Load(legacyPath, out var migrationWarning);
+    Expect(migrationWarning == null && migrated.Bpm == 95 && migrated.Gap == 15, "旧模式废弃字段不影响有效设置迁移");
+    SettingsStore.Save(legacyPath, migrated);
+    Expect(!File.ReadAllText(legacyPath).Contains("Rhythm"), "保存时移除废弃模式字段");
+}
+finally { File.Delete(legacyPath); }
+try { ScoreParser.Parse("1\n8"); }
+catch (ScoreFormatException e) { Expect(e.Position == 2, "错误定位保留精确字符索引"); }
+Console.WriteLine($"PASS FINAL: {passed} tests including v0.2.0");
 
 sealed class FakeHotkeys : IHotkeyBackend
 {

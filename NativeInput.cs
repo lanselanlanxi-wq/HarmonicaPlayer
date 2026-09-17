@@ -48,7 +48,7 @@ public sealed class NativeInput
     private static void Send(Input input)
     {
         if (SendInput(1, new[] { input }, Marshal.SizeOf<Input>()) != 1)
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "输入发送失败；可能是权限或输入限制。已停止。");
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "输入发送失败。请确认程序与游戏权限一致（需要时以管理员运行），切换英文输入法及无边框窗口后重试；仍失败则可能受到输入限制。");
     }
     private static void Key(ushort scan, bool down) => Send(new Input
     {
@@ -62,13 +62,13 @@ public sealed class NativeInput
     {
         // 左低、右高、中升半音；高1直接使用逗号键。
         if (note.Octave == -1) PressButton(0);
-        if (note.Octave == 1 && note.Degree != 1) PressButton(1);
+        if (note.Octave == 2 || (note.Octave == 1 && note.Degree != 1)) PressButton(1);
         if (note.Sharp) PressButton(2);
     }
     private void PressButton(int button) { buttons.Add(button); Button(button, true); }
     public void NoteOn(ScoreNote note)
     {
-        ushort scan = note.Octave == 1 && note.Degree == 1 ? (ushort)0x33 : Scans[note.Degree - 1];
+        ushort scan = note.Octave >= 1 && note.Degree == 1 ? (ushort)0x33 : Scans[note.Degree - 1];
         keys.Add(scan);
         Key(scan, true);
     }
