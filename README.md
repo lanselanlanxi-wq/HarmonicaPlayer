@@ -73,6 +73,6 @@ dotnet run --project .\Tests\WindowsSmoke\WindowsSmokeTests.csproj -c Release
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Build-Release.ps1
 ```
 
-脚本在测试失败时停止，生成bin\Release\HarmonicaPlayer-v0.2.1-win-x64.zip。包含自包含EXE、说明、模板、新旧示例和项目内整个“简谱”文件夹；没有曲谱文件夹时明确警告。
+脚本在测试失败时停止，生成bin\Release\HarmonicaPlayer-v0.2.1-win-x64.zip。包含自包含EXE、说明、模板、新旧示例和项目“简谱”文件夹内的TXT曲谱；ZIP等其他文件不会嵌套打包，没有曲谱文件夹时明确警告。
 
 发布前手动检查：新旧谱导入、BPM冲突、保存再导入、取消关闭、热键冲突恢复、倒计时停止、演奏中停止、关闭窗口、最高do游戏音高。Windows自动测试仅使用日志模式，不代替游戏测试。

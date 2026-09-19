@@ -23,7 +23,14 @@ try {
     Copy-Item -LiteralPath .\使用说明.txt -Destination $outputDir
     Copy-Item -LiteralPath '.\制谱说明.txt' -Destination $outputDir
     if (Test-Path -LiteralPath '.\简谱' -PathType Container) {
-        Copy-Item -LiteralPath '.\简谱' -Destination $outputDir -Recurse -Force
+        $scoreOutputDir = Join-Path $outputDir '简谱'
+        New-Item -ItemType Directory -Path $scoreOutputDir -Force | Out-Null
+        $scoreFiles = @(Get-ChildItem -LiteralPath '.\简谱' -File -Filter '*.txt')
+        if ($scoreFiles.Count -eq 0) {
+            Write-Warning '简谱文件夹内没有TXT曲谱。'
+        } else {
+            $scoreFiles | Copy-Item -Destination $scoreOutputDir -Force
+        }
     } else {
         Write-Warning '未找到简谱文件夹，本次仅打包内置示例谱。'
     }
