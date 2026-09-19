@@ -4,4 +4,5 @@
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup><Compile Remove="WindowsSmoke/**/*.cs" /><Compile Include="../ScoreParser.cs" Link="ScoreParser.cs" /><Compile Include="../HotkeySettings.cs" Link="HotkeySettings.cs" /><Compile Include="../AppSettings.cs" Link="AppSettings.cs" /><Compile Include="../SettingsWriter.cs" Link="SettingsWriter.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../ScoreDocument.cs" Link="ScoreDocument.cs" /><Compile Include="../PlaybackValidation.cs" Link="PlaybackValidation.cs" /></ItemGroup>
 </Project>

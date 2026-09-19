@@ -6,7 +6,6 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Microsoft.Win32;
 
 namespace HarmonicaPlayer;
 
@@ -18,6 +17,25 @@ public static class Program
 
 public sealed class PlayerWindow : Window
 {
+    private readonly TextBox songTitle = new() { Text = "未命名曲谱" };
+    private readonly TextBlock documentInfo = new() { TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock documentWarning = new() { TextWrapping = TextWrapping.Wrap, Background = Brushes.LemonChiffon };
+    private readonly Button saveScore = new() { Content = "保存 TXT", Margin = new Thickness(5) };
+    private readonly Button saveAs = new() { Content = "另存为", Margin = new Thickness(5) };
+    private readonly Button newScore = new() { Content = "新建", Margin = new Thickness(5) };
+    private readonly IScoreDialogs scoreDialogs;
+    private string? documentPath;
+    private bool legacyDocument, documentBusy;
+    private string[] extraHeaders = Array.Empty<string>();
+    private (string Title, string Bpm, string Body, string Gap) cleanDocument;
+    private long saveGeneration;
+    private bool DocumentDirty => cleanDocument != (songTitle.Text, bpm.Text, score.Text, gap.Text);
+    private void UpdateDocumentTitle()
+    {
+        Title = $"口琴简谱播放器 0.2.1 — {songTitle.Text}{(DocumentDirty ? " *" : "")}";
+        documentInfo.Text = documentPath ?? "尚未保存";
+    }
+    private void MarkDocumentClean() { cleanDocument = (songTitle.Text, bpm.Text, score.Text, gap.Text); UpdateDocumentTitle(); }
     private readonly TextBox score = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Height = 230, Text = "1234567 【1234567】 （1234567） #1 #2 #4 #5 #6 111 000" };
     private readonly TextBox gap = new() { Text = "20", Width = 75 };
     private readonly CheckBox dry = new() { Content = "仅日志测试（不发送键鼠、不发声）", IsChecked = true, Margin = new Thickness(0, 10, 0, 10) };
@@ -77,10 +95,11 @@ public sealed class PlayerWindow : Window
     private readonly Button retry = new() { Content = "重试注册", Margin = new Thickness(5), Padding = new Thickness(10, 6, 10, 6) };
     private readonly Button stop = new() { Content = "停止 F8", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
 
-    public PlayerWindow(string? settingsFile = null)
+    public PlayerWindow(string? settingsFile = null, IScoreDialogs? dialogs = null, Action<AppSettings>? writeSettings = null)
     {
+        scoreDialogs = dialogs ?? new ScoreDialogs();
         settingsPath = settingsFile ?? SettingsStore.DefaultPath;
-        Title = "口琴简谱播放器 0.2.0"; Width = 740; Height = 900; MinWidth = 600; MinHeight = 600;
+        Title = "口琴简谱播放器 0.2.1"; Width = 740; Height = 900; MinWidth = 600; MinHeight = 600;
         var panel = new StackPanel { Margin = new Thickness(18) };
         var root = new DockPanel { Margin = new Thickness(8) };
         var fixedHeader = new StackPanel();
@@ -108,6 +127,11 @@ public sealed class PlayerWindow : Window
         var controls = new WrapPanel { Orientation = Orientation.Horizontal };
         controls.Children.Add(import); controls.Children.Add(refresh); controls.Children.Add(start);
         controls.Children.Add(stop); panel.Children.Add(controls); panel.Children.Add(startReason);
+        var fileControls = new WrapPanel();
+        fileControls.Children.Add(newScore); fileControls.Children.Add(saveScore); fileControls.Children.Add(saveAs);
+        panel.Children.Add(fileControls);
+        panel.Children.Add(new TextBlock { Text = "曲名（与文件名独立）：" });
+        panel.Children.Add(songTitle); panel.Children.Add(documentInfo); panel.Children.Add(documentWarning);
         var shortcuts = new StackPanel { Orientation = Orientation.Horizontal };
         shortcuts.Children.Add(configure); shortcuts.Children.Add(retry); panel.Children.Add(shortcuts);
         panel.Children.Add(hotkeyStatus); panel.Children.Add(settingsStatus); panel.Children.Add(score);
@@ -129,15 +153,22 @@ public sealed class PlayerWindow : Window
         });
         panel.Children.Add(log);
         settings = SettingsStore.Load(settingsPath, out var loadWarning);
-        settingsWriter = new SettingsWriter(value => SettingsStore.Save(settingsPath, value),
-            loadWarning == null && File.Exists(settingsPath) ? settings : null);
+        settingsWriter = new SettingsWriter(writeSettings ?? (value => SettingsStore.Save(settingsPath, value)),
+            writeSettings == null && loadWarning == null && File.Exists(settingsPath) ? settings : null);
         bpm.Text = settings.Bpm.ToString(); gap.Text = settings.Gap.ToString();
         settingsStatus.Text = loadWarning ?? "设置会自动保存；每次启动默认开启“仅日志测试”。";
         saveTimer.Tick += async (_, _) => { saveTimer.Stop(); await SaveCurrentSettingsAsync(); };
         previewTimer.Tick += (_, _) => { previewTimer.Stop(); Preview(); };
         configure.Click += (_, _) => ConfigureHotkeys();
         retry.Click += (_, _) => ApplyHotkeys();
-        import.Click += (_, _) => Import(); start.Click += async (_, _) => await Begin();
+        import.Click += async (_, _) => await Import(); start.Click += async (_, _) => await Begin();
+        saveScore.Click += async (_, _) => await DocumentOperation(() => SaveScoreAsync(false));
+        saveAs.Click += async (_, _) => await DocumentOperation(() => SaveScoreAsync(true));
+        newScore.Click += async (_, _) => await DocumentOperation(async () =>
+        {
+            if (!await ConfirmUnsavedAsync()) return false;
+            ApplyDocument(new ScoreDocument("未命名曲谱", 120, "")); return true;
+        });
         stop.Click += (_, _) => Stop();
         refresh.Click += (_, _) => Preview();
         score.TextChanged += (_, _) => QueuePreview();
@@ -145,6 +176,9 @@ public sealed class PlayerWindow : Window
         gap.TextChanged += (_, _) => QueuePreview();
         foreach (var box in new[] { bpm, gap })
             box.TextChanged += (_, _) => QueueSave();
+        foreach (var box in new[] { songTitle, bpm, score, gap })
+            box.TextChanged += (_, _) => UpdateDocumentTitle();
+        MarkDocumentClean();
         dry.Checked += (_, _) => UpdateAvailability();
         dry.Unchecked += (_, _) => UpdateAvailability();
         SetBusy(false); Preview();
@@ -160,6 +194,7 @@ public sealed class PlayerWindow : Window
             if (allowClose) return;
             e.Cancel = true;
             if (closing) return;
+            if (documentBusy) { ReportIssue("正在读写曲谱，请完成后再关闭。"); return; }
             closing = true;
             saveTimer.Stop(); previewTimer.Stop();
             cancellation?.Cancel(); // Cancel first; do not put disk I/O before it.
@@ -191,6 +226,7 @@ public sealed class PlayerWindow : Window
                 status.Text = "按键释放失败，请手动按下并松开相关键后再关闭：" + releaseError; ReportIssue(status.Text);
                 return;
             }
+            if (!await ConfirmUnsavedAsync()) { status.Text = "已取消关闭。"; return; }
             Task save = SaveCurrentSettingsAsync(true);
             if (await Task.WhenAny(save, Task.Delay(1500)) != save)
                 status.Text = "正在保存最后的设置，请稍候（窗口仍可响应）…";
@@ -204,6 +240,7 @@ public sealed class PlayerWindow : Window
             if (!allowClose)
             {
                 closing = false; stop.IsEnabled = true; SetBusy(false);
+                Preview(); QueueSave(); // A cancelled close must restore validation/debouncing.
             }
         }
     }
@@ -231,10 +268,12 @@ public sealed class PlayerWindow : Window
     private void QueueSave()
     {
         if (closing) return;
+        ++saveGeneration; // Invalidate completion even during the debounce interval.
         saveTimer.Stop(); saveTimer.Start();
     }
     private async Task SaveCurrentSettingsAsync(bool preserveValidTiming = false)
     {
+        long generation = ++saveGeneration;
         AppSettings next = settings;
         string? invalid = null;
         if (!int.TryParse(bpm.Text, out int tempo) || !int.TryParse(gap.Text, out int silence))
@@ -249,13 +288,13 @@ public sealed class PlayerWindow : Window
         { settingsStatus.Text = invalid; return; }
         settings = next; // Update the in-memory snapshot before asynchronous disk work.
         string? error = await settingsWriter.SaveAsync(next);
-        if (settings != next) return; // Do not overwrite a newer save's status.
+        if (generation != saveGeneration) return; // Never replace a newer edit/error's status.
         settingsStatus.Text = error != null ? "设置未保存：" + error :
             invalid ?? "设置已保存（快捷键、速度和音符间隔）。";
     }
     private void ApplyHotkeys()
     {
-        if (hotkeys == null || cancellation != null || closing || beginning || editingHotkeys) return;
+        if (hotkeys == null || cancellation != null || closing || beginning || editingHotkeys || documentBusy) return;
         hotkeys.Apply(settings.Start, settings.Stop);
         start.Content = "开始 " + settings.Start.Label; stop.Content = "停止 " + settings.Stop.Label;
         hotkeyStatus.Text = hotkeys.Describe(settings.Start, settings.Stop);
@@ -265,7 +304,7 @@ public sealed class PlayerWindow : Window
     }
     private void ConfigureHotkeys()
     {
-        if (hotkeys == null || cancellation != null || closing || beginning || editingHotkeys) return;
+        if (hotkeys == null || cancellation != null || closing || beginning || editingHotkeys || documentBusy) return;
         editingHotkeys = true; hotkeys.Suspend();
         try
         {
@@ -291,21 +330,69 @@ public sealed class PlayerWindow : Window
         }
         token.ThrowIfCancellationRequested();
     }
-    private void Import()
+    private async Task DocumentOperation(Func<Task<bool>> action)
     {
-        if (cancellation != null || beginning || editingHotkeys || closing) return;
-        beginning = true; SetBusy(true);
+        if (cancellation != null || beginning || editingHotkeys || closing || documentBusy) return;
+        documentBusy = true; SetBusy(true);
+        try { await action(); }
+        catch (Exception e) { ReportIssue("曲谱操作失败：" + e.Message); }
+        finally { documentBusy = false; SetBusy(false); }
+    }
+    private Task Import() => DocumentOperation(async () =>
+    {
+        string? path = scoreDialogs.Open(this);
+        if (path == null) return false;
+        int fallback = int.TryParse(bpm.Text, out int value) && value is >= 20 and <= 300 ? value : settings.Bpm;
+        var result = await ScoreDocumentReader.ReadAsync(path, fallback);
+        if (!await ConfirmUnsavedAsync()) return false;
+        // Saving the current document may have updated the very file selected for import.
+        result = await ScoreDocumentReader.ReadAsync(path, fallback);
+        ApplyDocument(result.Document);
+        documentWarning.Text = string.Join("\n", result.Warnings);
+        status.Text = scoreIssue == null ? "已导入，检查通过；请确认速度（BPM）。" : "已导入，请修正顶部提示的错误。";
+        return true;
+    });
+    private void ApplyDocument(ScoreDocument document)
+    {
+        documentPath = document.SourcePath; legacyDocument = document.IsLegacy;
+        extraHeaders = document.ExtraHeaders ?? Array.Empty<string>();
+        songTitle.Text = document.Title; bpm.Text = document.Bpm.ToString(); score.Text = document.ScoreText;
+        gap.Text = document.Gap.ToString();
+        documentWarning.Text = ""; operationIssue = null; MarkDocumentClean(); Preview();
+    }
+    private async Task<bool> ConfirmUnsavedAsync()
+    {
+        if (!DocumentDirty) return true;
+        return scoreDialogs.Unsaved(this) switch
+        {
+            MessageBoxResult.No => true,
+            MessageBoxResult.Yes => await SaveScoreAsync(false),
+            _ => false
+        };
+    }
+    private async Task<bool> SaveScoreAsync(bool forceSaveAs)
+    {
         try
         {
-            var dialog = new OpenFileDialog { Filter = "TXT 简谱|*.txt" };
-            if (dialog.ShowDialog(this) != true || closing) return;
-            if (new FileInfo(dialog.FileName).Length > 1024 * 1024) throw new IOException("文件不得超过1MB。");
-            score.Text = File.ReadAllText(dialog.FileName, new UTF8Encoding(false, true));
-            Title = "口琴简谱播放器 0.2.0 — " + Path.GetFileName(dialog.FileName);
-            operationIssue = null; Preview(); status.Text = scoreIssue == null ? "已导入，格式检查通过。速度在界面设置。" : "已导入，但谱面存在错误，请查看顶部提示。";
+            var document = new ScoreDocument(songTitle.Text, PlaybackValidation.ParseBpm(bpm.Text), score.Text,
+                documentPath, legacyDocument, extraHeaders, PlaybackValidation.ParseGap(gap.Text));
+            document.Validate(gap.Text); // Validate before asking for a destination.
+            string? path = documentPath;
+            if (forceSaveAs || legacyDocument || path == null)
+            {
+                string name = string.Concat(songTitle.Text.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+                path = scoreDialogs.Save(this, name + (legacyDocument ? "-新版" : "") + ".txt");
+                if (path == null) return false;
+            }
+            await ScoreDocumentWriter.SaveAsync(path, document, gap.Text);
+            documentPath = Path.GetFullPath(path); legacyDocument = false;
+            documentWarning.Text = string.Join("\n", ScoreDocumentReader.Parse(
+                ScoreDocumentWriter.Serialize(document, gap.Text), documentPath, document.Bpm).Warnings);
+            MarkDocumentClean(); operationIssue = null; UpdateAlert();
+            status.Text = "曲谱已保存（新格式，含曲名、BPM和音符间隔）。";
+            return true;
         }
-        catch (Exception e) { ReportIssue("导入失败，请使用UTF-8 TXT：" + e.Message); }
-        finally { beginning = false; SetBusy(false); }
+        catch (Exception e) { ReportIssue("曲谱未保存：" + e.Message); return false; }
     }
     private void Stop()
     {
@@ -316,7 +403,7 @@ public sealed class PlayerWindow : Window
     }
     private async Task Begin(uint triggerKey = 0)
     {
-        if (cancellation != null || closing || beginning || editingHotkeys) return;
+        if (cancellation != null || closing || beginning || editingHotkeys || documentBusy) return;
         beginning = true; SetBusy(true);
         operationIssue = null; UpdateAlert();
         try
@@ -349,19 +436,10 @@ public sealed class PlayerWindow : Window
         }
     }
     private int ValidateGap(List<ScoreNote> notes, double ms)
-    {
-        if (!int.TryParse(gap.Text, out int silence) || silence < 10 || silence > 5000)
-            throw new FormatException("音符间隔／留白须为10～5000毫秒的整数。");
-        var shortNote = notes.FirstOrDefault(n => n.Degree != 0 && n.Beats * ms - silence - 12 < 40);
-        if (shortNote != null)
-            throw new ScoreFormatException(shortNote.Position, $"第{shortNote.Position + 1}个字符的音过短：扣除12ms变调准备和{silence}ms留白后，按住时间不足40ms。请降低速度（BPM）或减小音符间隔。");
-        return silence;
-    }
+        => PlaybackValidation.ValidateGap(gap.Text, notes, ms);
     private double Timing()
     {
-        if (!int.TryParse(bpm.Text, out int tempo) || tempo < 20 || tempo > 300)
-            throw new FormatException("速度（BPM）范围20～300，请输入整数。");
-        return 60000.0 / tempo;
+        return 60000.0 / PlaybackValidation.ParseBpm(bpm.Text);
     }
     private void Preview()
     {
@@ -386,12 +464,14 @@ public sealed class PlayerWindow : Window
     }
     private void SetBusy(bool busy)
     {
-        busy |= closing;
+        busy |= closing || documentBusy;
         uiBusy = busy;
         import.IsEnabled = refresh.IsEnabled = gap.IsEnabled = dry.IsEnabled = !busy;
         bpm.IsEnabled = !busy;
         configure.IsEnabled = retry.IsEnabled = !busy;
         score.IsReadOnly = busy;
+        songTitle.IsReadOnly = busy;
+        saveScore.IsEnabled = saveAs.IsEnabled = newScore.IsEnabled = !busy;
         UpdateAvailability();
     }
     private async Task Run(List<ScoreNote> notes, double ms, int silence, bool simulation, uint triggerKey, CancellationToken token)
@@ -451,7 +531,7 @@ public sealed class PlayerWindow : Window
                     if (note.Degree != 0)
                     {
                         if (!simulation) output.Modifiers(note);
-                        Wait(begin + 12); Check();
+                        Wait(begin + PlaybackValidation.PreparationMs); Check();
                         if (!simulation) output.NoteOn(note);
                         Wait(begin + noteMs - silence);
                         var error = simulation ? null : output.Release();

@@ -1,5 +1,7 @@
 using HarmonicaPlayer;
 
+if (args.Contains("--gap-only")) { await GapDocumentTests.Run(); return; }
+
 int passed = 0;
 void Expect(bool ok, string name)
 {
@@ -169,6 +171,8 @@ finally { File.Delete(legacyPath); }
 try { ScoreParser.Parse("1\n8"); }
 catch (ScoreFormatException e) { Expect(e.Position == 2, "错误定位保留精确字符索引"); }
 Console.WriteLine($"PASS FINAL: {passed} tests including v0.2.0");
+await DocumentTests.Run();
+await GapDocumentTests.Run();
 
 sealed class FakeHotkeys : IHotkeyBackend
 {

@@ -1,0 +1,7 @@
+@format=HarmonicaPlayer/1
+@title=节奏示例
+@bpm=120
+@gap=20
+
+1 2_ 3_ 5 — |
+0 6. 5_ 1 |
