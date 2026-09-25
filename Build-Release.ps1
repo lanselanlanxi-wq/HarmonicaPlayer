@@ -5,9 +5,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed. Publishing cancelled.' }
 
     dotnet run --project .\Tests\WindowsSmoke\WindowsSmokeTests.csproj -c Release
-    if ($LASTEXITCODE -ne 0) { throw 'Windows close tests failed. Publishing cancelled.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Windows UI tests failed. Publishing cancelled.' }
 
-    $version = '0.2.1'
+    $version = '0.3.3'
     $buildStamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
     $outputDir = Join-Path $PSScriptRoot "bin\Release\publish-$version-$buildStamp"
     dotnet publish .\HarmonicaPlayer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $outputDir
@@ -16,9 +16,14 @@ try {
 
     Copy-Item .\rhythm-demo.txt $outputDir
     Copy-Item .\score-format-demo.txt $outputDir
+    Copy-Item .\audio-midi-demo.txt $outputDir
     Copy-Item .\CONTRIBUTIONS.md $outputDir
-    Copy-Item .\UPDATE-0.2.1.md $outputDir
+    Copy-Item .\THIRD-PARTY-NOTICES.md $outputDir
+    Copy-Item .\Assets\Harmonica\LICENSE-CC0.txt $outputDir
+    Copy-Item .\UPDATE-0.3.3.md $outputDir
+    Copy-Item .\VALIDATION-0.3.3.md $outputDir
     Copy-Item .\README.md $outputDir
+    Copy-Item .\AudioExamples $outputDir -Recurse
     Copy-Item -LiteralPath .\ai转谱模板.txt -Destination $outputDir
     Copy-Item -LiteralPath .\使用说明.txt -Destination $outputDir
     Copy-Item -LiteralPath '.\制谱说明.txt' -Destination $outputDir

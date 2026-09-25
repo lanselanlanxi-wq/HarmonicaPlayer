@@ -9,6 +9,7 @@ public interface IScoreDialogs
     string? Open(Window owner);
     string? Save(Window owner, string suggestedName);
     MessageBoxResult Unsaved(Window owner);
+    string? SaveMidi(Window owner, string suggestedName) => new ScoreDialogs().SaveMidi(owner, suggestedName);
 }
 
 public sealed class ScoreDialogs : IScoreDialogs
@@ -21,6 +22,12 @@ public sealed class ScoreDialogs : IScoreDialogs
     public string? Save(Window owner, string suggestedName)
     {
         var dialog = new SaveFileDialog { Filter = "TXT 简谱|*.txt", DefaultExt = ".txt", AddExtension = true,
+            OverwritePrompt = true, FileName = suggestedName };
+        return dialog.ShowDialog(owner) == true ? dialog.FileName : null;
+    }
+    public string? SaveMidi(Window owner, string suggestedName)
+    {
+        var dialog = new SaveFileDialog { Filter = "标准 MIDI 文件|*.mid", DefaultExt = ".mid", AddExtension = true,
             OverwritePrompt = true, FileName = suggestedName };
         return dialog.ShowDialog(owner) == true ? dialog.FileName : null;
     }

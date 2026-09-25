@@ -1,7 +1,12 @@
 using HarmonicaPlayer;
 
 if (args.Contains("--gap-only")) { await GapDocumentTests.Run(); return; }
+if (args.Contains("--sample-audio-only")) { SampleAudioTests.Run(); return; }
 
+if (args.Contains("--release-only")) { ReleaseAudioTests.Run(); return; }
+
+if (args.Contains("--short-note-only")) { ShortNoteAudioTests.Run(); return; }
+if (args.Length == 2 && args[0] == "--render-example") { ShortNoteAudioTests.WriteExample(args[1]); return; }
 int passed = 0;
 void Expect(bool ok, string name)
 {
@@ -173,6 +178,10 @@ catch (ScoreFormatException e) { Expect(e.Position == 2, "错误定位保留精�
 Console.WriteLine($"PASS FINAL: {passed} tests including v0.2.0");
 await DocumentTests.Run();
 await GapDocumentTests.Run();
+await AudioMidiTests.Run();
+SampleAudioTests.Run();
+ReleaseAudioTests.Run();
+ShortNoteAudioTests.Run();
 
 sealed class FakeHotkeys : IHotkeyBackend
 {

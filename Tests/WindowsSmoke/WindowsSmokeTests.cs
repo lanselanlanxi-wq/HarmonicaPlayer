@@ -86,6 +86,7 @@ public static class WindowsSmokeTests
                 }
                 await SettingsGenerationTests();
                 await DocumentWindowTests();
+                await AudioWindowTests();
             }
             catch (Exception e) { failures++; Console.Error.WriteLine(e); }
             finally { app.Shutdown(); }
@@ -219,6 +220,69 @@ public static class WindowsSmokeTests
             System.IO.Directory.Delete(directory);
         }
     }
+    private static async Task AudioWindowTests()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "HarmonicaAudioUI-" + Guid.NewGuid() + ".json");
+        var fake = new FakeLocalAudio();
+        var dialogs = new TestScoreDialogs { MidiPath = path + ".mid" };
+        var window = new PlayerWindow(path, dialogs, audioPlayer: fake);
+        try
+        {
+            window.Show(); await WaitUntil(() => window.IsLoaded, "audio window loaded");
+            var editor = Field<TextBox>(window, "score");
+            editor.Text = "1 【2】 0 3"; editor.Select(3, 0);
+            await WaitUntil(() => Field<Button>(window, "listen").IsEnabled, "listen available");
+            await Invoke(window, "ExportMidiAsync");
+            if (!File.Exists(dialogs.MidiPath) || !window.Title.EndsWith(" *") || editor.IsReadOnly)
+                throw new Exception("MIDI export lost dirty state or did not create file");
+            dialogs.MidiPath = null;
+            await Invoke(window, "ExportMidiAsync");
+            if (!window.Title.EndsWith(" *") || editor.IsReadOnly)
+                throw new Exception("Cancelled export changed editor");
+            Field<HotkeyController>(window, "hotkeys").Suspend();
+            Field<CheckBox>(window, "dry").IsChecked = false;
+            if (Field<Button>(window, "start").IsEnabled || !Field<Button>(window, "listen").IsEnabled)
+                throw new Exception("Local audio depends on game hotkey readiness");
+            var run = Invoke(window, "ListenAsync", true);
+            await WaitUntil(() => fake.Active, "audio started");
+            if (fake.StartIndex != 1 || !editor.IsReadOnly || Field<Button>(window,"exportMidi").IsEnabled ||
+                Field<Button>(window,"start").IsEnabled || Field<TextBox>(window,"bpm").IsEnabled)
+                throw new Exception("Audio cursor or mutual exclusion failed");
+            fake.Report!(1000);
+            await WaitUntil(() => editor.SelectionStart == 6, "progress highlights rest");
+            Field<Slider>(window, "volumeSlider").Value = 35;
+            if (fake.Volume != 35) throw new Exception("Volume not forwarded");
+            Field<Button>(window,"stop").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            await run.WaitAsync(TimeSpan.FromSeconds(3));
+            if(editor.IsReadOnly || editor.SelectionStart != 3 || !Field<Button>(window,"listen").IsEnabled)
+                throw new Exception("Stop did not restore editor/cursor");
+            fake.Fail = true;
+            await Invoke(window,"ListenAsync",false);
+            if(editor.IsReadOnly || !Field<TextBlock>(window,"alert").Text.Contains("fake audio device"))
+                throw new Exception("Audio error not visible or UI stuck");
+            fake.Fail = false;
+            run = Invoke(window,"ListenAsync",false);
+            await WaitUntil(() => fake.Active,"audio retry");
+            fake.Complete(); await run.WaitAsync(TimeSpan.FromSeconds(3));
+            if(Field<ProgressBar>(window,"audioProgress").Value != 100 || editor.IsReadOnly)
+                throw new Exception("Audio completion did not restore UI");
+            // Replay then close while a stream is active.
+            run = Invoke(window,"ListenAsync",false);
+            await WaitUntil(() => fake.Active,"audio before close");
+            await CloseWindow(window); await run;
+            if(fake.Active) throw new Exception("Audio continued after close");
+            var saved = SettingsStore.Load(path, out var warning);
+            if(warning != null || saved.PreviewVolume != 35) throw new Exception("Preview volume not saved");
+            Console.WriteLine("PASS v0.3.0 audio UI: cursor, progress, lock, volume, stop, failure/retry, complete, close");
+        }
+        finally
+        {
+            if(window.IsVisible) await CloseWindow(window);
+            if(File.Exists(path)) File.Delete(path);
+            if(File.Exists(path + ".mid")) File.Delete(path + ".mid");
+        }
+    }
+
     private static IEnumerable<DependencyObject> Descendants(DependencyObject node)
     {
         foreach (object child in LogicalTreeHelper.GetChildren(node))
@@ -232,9 +296,28 @@ public static class WindowsSmokeTests
 
 sealed class TestScoreDialogs : IScoreDialogs
 {
-    public string? OpenPath, SavePath;
+    public string? OpenPath, SavePath, MidiPath;
     public MessageBoxResult Answer = MessageBoxResult.No;
     public string? Open(Window owner) => OpenPath;
     public string? Save(Window owner, string suggestedName) => SavePath;
     public MessageBoxResult Unsaved(Window owner) => Answer;
+    public string? SaveMidi(Window owner, string suggestedName) => MidiPath;
+}
+
+sealed class FakeLocalAudio : ILocalAudioPlayer
+{
+    public int Volume { get; set; }
+    public bool Active, Fail;
+    public int StartIndex;
+    public Action<double>? Report;
+    private TaskCompletionSource? completion;
+    public void Complete() => completion!.TrySetResult();
+    public async Task PlayAsync(ScoreTimeline timeline, int startIndex, Action<double> progress, CancellationToken token)
+    {
+        if(Fail) throw new InvalidOperationException("fake audio device unavailable");
+        Active=true; StartIndex=startIndex; Report=progress;
+        completion=new(TaskCreationOptions.RunContinuationsAsynchronously);
+        try { await completion.Task.WaitAsync(token); }
+        finally { Active=false; }
+    }
 }

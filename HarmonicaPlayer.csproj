@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Version>0.2.1</Version>
+    <Version>0.3.3</Version>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
@@ -9,4 +9,5 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
   <ItemGroup><Compile Remove="Tests/**/*.cs" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="Assets/Harmonica/*" LogicalName="HarmonicaSamples.%(Filename)%(Extension)" /></ItemGroup>
 </Project>

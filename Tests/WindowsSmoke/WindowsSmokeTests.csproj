@@ -9,4 +9,5 @@
     <StartupObject>HarmonicaPlayer.WindowsSmokeTests</StartupObject>
   </PropertyGroup>
   <ItemGroup><Compile Include="../../*.cs" Link="Source/%(Filename)%(Extension)" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../../Assets/Harmonica/*" LogicalName="HarmonicaSamples.%(Filename)%(Extension)" /></ItemGroup>
 </Project>

@@ -15,7 +15,7 @@ public static class Program
     public static void Main() => SingleInstance.Run();
 }
 
-public sealed class PlayerWindow : Window
+public sealed partial class PlayerWindow : Window
 {
     private readonly TextBox songTitle = new() { Text = "未命名曲谱" };
     private readonly TextBlock documentInfo = new() { TextWrapping = TextWrapping.Wrap };
@@ -32,7 +32,7 @@ public sealed class PlayerWindow : Window
     private bool DocumentDirty => cleanDocument != (songTitle.Text, bpm.Text, score.Text, gap.Text);
     private void UpdateDocumentTitle()
     {
-        Title = $"口琴简谱播放器 0.2.1 — {songTitle.Text}{(DocumentDirty ? " *" : "")}";
+        Title = $"口琴简谱播放器 0.3.3 — {songTitle.Text}{(DocumentDirty ? " *" : "")}";
         documentInfo.Text = documentPath ?? "尚未保存";
     }
     private void MarkDocumentClean() { cleanDocument = (songTitle.Text, bpm.Text, score.Text, gap.Text); UpdateDocumentTitle(); }
@@ -60,6 +60,7 @@ public sealed class PlayerWindow : Window
         startReason.Text = scoreIssue != null ? "无法开始：请先修正曲谱或速度、音符间隔。" :
             blockedByHotkey ? "无法开始游戏演奏：请先修复停止快捷键。" : "";
         locateError.IsEnabled = !uiBusy && errorPosition != null;
+        listen.IsEnabled = listenFromCursor.IsEnabled = exportMidi.IsEnabled = !uiBusy && scoreIssue == null;
     }
     private void LocateError()
     {
@@ -95,11 +96,12 @@ public sealed class PlayerWindow : Window
     private readonly Button retry = new() { Content = "重试注册", Margin = new Thickness(5), Padding = new Thickness(10, 6, 10, 6) };
     private readonly Button stop = new() { Content = "停止 F8", Margin = new Thickness(5), Padding = new Thickness(15, 6, 15, 6) };
 
-    public PlayerWindow(string? settingsFile = null, IScoreDialogs? dialogs = null, Action<AppSettings>? writeSettings = null)
+    public PlayerWindow(string? settingsFile = null, IScoreDialogs? dialogs = null, Action<AppSettings>? writeSettings = null, ILocalAudioPlayer? audioPlayer = null)
     {
         scoreDialogs = dialogs ?? new ScoreDialogs();
+        localAudio = audioPlayer ?? new LocalAudioPlayer();
         settingsPath = settingsFile ?? SettingsStore.DefaultPath;
-        Title = "口琴简谱播放器 0.2.1"; Width = 740; Height = 900; MinWidth = 600; MinHeight = 600;
+        Title = "口琴简谱播放器 0.3.3"; Width = 740; Height = 900; MinWidth = 600; MinHeight = 600;
         var panel = new StackPanel { Margin = new Thickness(18) };
         var root = new DockPanel { Margin = new Thickness(8) };
         var fixedHeader = new StackPanel();
@@ -130,6 +132,7 @@ public sealed class PlayerWindow : Window
         var fileControls = new WrapPanel();
         fileControls.Children.Add(newScore); fileControls.Children.Add(saveScore); fileControls.Children.Add(saveAs);
         panel.Children.Add(fileControls);
+        AddListeningControls(panel);
         panel.Children.Add(new TextBlock { Text = "曲名（与文件名独立）：" });
         panel.Children.Add(songTitle); panel.Children.Add(documentInfo); panel.Children.Add(documentWarning);
         var shortcuts = new StackPanel { Orientation = Orientation.Horizontal };
@@ -156,6 +159,7 @@ public sealed class PlayerWindow : Window
         settingsWriter = new SettingsWriter(writeSettings ?? (value => SettingsStore.Save(settingsPath, value)),
             writeSettings == null && loadWarning == null && File.Exists(settingsPath) ? settings : null);
         bpm.Text = settings.Bpm.ToString(); gap.Text = settings.Gap.ToString();
+        volumeSlider.Value = settings.PreviewVolume; localAudio.Volume = settings.PreviewVolume;
         settingsStatus.Text = loadWarning ?? "设置会自动保存；每次启动默认开启“仅日志测试”。";
         saveTimer.Tick += async (_, _) => { saveTimer.Stop(); await SaveCurrentSettingsAsync(); };
         previewTimer.Tick += (_, _) => { previewTimer.Stop(); Preview(); };
@@ -274,13 +278,13 @@ public sealed class PlayerWindow : Window
     private async Task SaveCurrentSettingsAsync(bool preserveValidTiming = false)
     {
         long generation = ++saveGeneration;
-        AppSettings next = settings;
+        AppSettings next = settings with { PreviewVolume = (int)volumeSlider.Value };
         string? invalid = null;
         if (!int.TryParse(bpm.Text, out int tempo) || !int.TryParse(gap.Text, out int silence))
             invalid = "部分数值尚未填写完整，保留上次有效设置。";
         else
         {
-            var candidate = settings with { Bpm = tempo, Gap = silence };
+            var candidate = next with { Bpm = tempo, Gap = silence };
             try { candidate.Validate(); next = candidate; }
             catch (FormatException e) { invalid = e.Message; }
         }
@@ -290,7 +294,7 @@ public sealed class PlayerWindow : Window
         string? error = await settingsWriter.SaveAsync(next);
         if (generation != saveGeneration) return; // Never replace a newer edit/error's status.
         settingsStatus.Text = error != null ? "设置未保存：" + error :
-            invalid ?? "设置已保存（快捷键、速度和音符间隔）。";
+            invalid ?? "设置已保存（快捷键、速度、音符间隔和试听音量）。";
     }
     private void ApplyHotkeys()
     {
@@ -398,7 +402,7 @@ public sealed class PlayerWindow : Window
     {
         if (closing) return; // Shutdown owns final input cleanup; do not race it.
         cancellation?.Cancel();
-        if (cancellation != null) status.Text = "正在停止并释放输入…";
+        if (cancellation != null) status.Text = listening ? "正在停止试听…" : "正在停止并释放输入…";
         else { var error = output.Release(); status.Text = error ?? "已停止。"; if (error != null) ReportIssue("释放按键失败：" + error); }
     }
     private async Task Begin(uint triggerKey = 0)

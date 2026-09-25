@@ -9,12 +9,13 @@ public sealed record AppSettings
     public HotkeyBinding Stop { get; init; } = HotkeyBinding.DefaultStop;
     public int Bpm { get; init; } = 120;
     public int Gap { get; init; } = 20;
+    public int PreviewVolume { get; init; } = 60;
 
     public void Validate()
     {
         if (Start is null || Stop is null) throw new FormatException("缺少快捷键设置。");
         HotkeyBinding.ValidatePair(Start, Stop);
-        if (Bpm is < 20 or > 300 || Gap is < 10 or > 5000)
+        if (Bpm is < 20 or > 300 || Gap is < 10 or > 5000 || PreviewVolume is < 0 or > 100)
             throw new FormatException("设置数值超出允许范围。");
     }
 }

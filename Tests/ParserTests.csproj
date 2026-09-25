@@ -5,4 +5,6 @@
   </PropertyGroup>
   <ItemGroup><Compile Remove="WindowsSmoke/**/*.cs" /><Compile Include="../ScoreParser.cs" Link="ScoreParser.cs" /><Compile Include="../HotkeySettings.cs" Link="HotkeySettings.cs" /><Compile Include="../AppSettings.cs" Link="AppSettings.cs" /><Compile Include="../SettingsWriter.cs" Link="SettingsWriter.cs" /></ItemGroup>
   <ItemGroup><Compile Include="../ScoreDocument.cs" Link="ScoreDocument.cs" /><Compile Include="../PlaybackValidation.cs" Link="PlaybackValidation.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../ScoreTimeline.cs" Link="ScoreTimeline.cs" /><Compile Include="../MidiExporter.cs" Link="MidiExporter.cs" /><Compile Include="../AudioSynthesis.cs" Link="AudioSynthesis.cs" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../Assets/Harmonica/*" LogicalName="HarmonicaSamples.%(Filename)%(Extension)" /></ItemGroup>
 </Project>
